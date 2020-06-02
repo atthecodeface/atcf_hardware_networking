@@ -20,10 +20,14 @@
  */
 /*a Includes
  */
-include "types/apb.h"
-include "types/sram.h"
-include "types/axi.h"
-include "axi/axi4s_modules.h"
+include "apb::apb.h"
+include "utils::sram_access.h"
+include "utils::fifo_status.h"
+include "axi4s.h"
+include "axi4s_modules.h"
+
+/*a Constants */
+constant integer tx_poll_count_restart_value=10;
 
 /*a Types */
 /*t t_rx_fsm */
@@ -170,7 +174,7 @@ typedef struct {
     bit       provide_axi_credit "Asserted if AXI credit is being increased by output data being taken";
     bit[14]   words_in_packet           "Count of word in packet from pkt_status";
     bit[14]   next_poll_count;
-bit[4] last_strobe;
+    bit[4] last_strobe;
     bit       axi_in_credit            "Asserted if AXI is in credit";
     bit       last_word                "Asserted if last word of packet to be read";
     bit       poll_pkt_status          "Packet status poll required";
@@ -314,6 +318,7 @@ and the word at the write pointer is zeroed.
     clocked t_tx_state  tx_state = {*=0, fsm_state=tx_fsm_reset};
     net     bit         tx_fifo_axi4s_ready "Asserted if TX FIFO can take more data";
     net     t_axi4s32   tx_axi4s;
+    net     t_fifo_status tx_axi4s_fifo_status;
 
     /*b APB interface */
     apb_interface_logic """
@@ -355,8 +360,11 @@ and the word at the write pointer is zeroed.
         case access_read_tx_config: {
             apb_response.prdata[16;0] = tx_state.buffer_end;
         }
+        case access_read_tx_data_ptr: {
+            apb_response.prdata = bundle(tx_state.read_ptr, apb_state.tx_data_ptr);
+        }
         case access_read_rx_data_ptr: {
-            apb_response.prdata = bundle(16b0, apb_state.rx_data_ptr);
+            apb_response.prdata = bundle(rx_state.write_ptr, apb_state.rx_data_ptr);
         }
         case access_read_rx_data: {
             apb_response.prdata = apb_state.rx_data;
@@ -783,7 +791,7 @@ and the word at the write pointer is zeroed.
         tx_combs.pkt_ready = tx_state.pkt_status_valid;
         tx_combs.next_poll_count = tx_state.count - 1;
         if (tx_state.count==0) {
-            tx_combs.next_poll_count = 10;
+            tx_combs.next_poll_count = tx_poll_count_restart_value;
         }
         tx_combs.poll_pkt_status = (tx_state.count==0);
 
@@ -930,7 +938,8 @@ and the word at the write pointer is zeroed.
                                 req_in <= tx_state.axi4s,
                                 ack_in => tx_fifo_axi4s_ready,
                                 req_out => tx_axi4s,
-                                ack_out <= tx_axi4s_tready
+                                ack_out <= tx_axi4s_tready,
+                                fifo_status => tx_axi4s_fifo_status
             );
         tx_combs.provide_axi_credit = 0;
         if (tx_axi4s.valid && tx_axi4s_tready) {

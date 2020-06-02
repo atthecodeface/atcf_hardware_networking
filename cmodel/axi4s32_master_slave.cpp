@@ -13,15 +13,8 @@
  * limitations under the License.
  *
  * @file   axi4s32_master_slave.cpp
- * @brief  BBC microcomputer display
+ * @brief  AXI4S master/slave bus functional model
  *
- * BBC display C model source code, which uses the BBC shared memory
- * (SHM) to create a SHM frame buffer and keyboard interaction for CDL
- * simulations. The axi4s32_master_slave_vnc program can be used to interact
- * with this SHM, allowing a simulation to be viewed, and to have
- * keyboard and reset interactions.
- *
- * The initial cut of this source code is from CDL C model output.
  *
  */
 /*a Includes */
@@ -42,10 +35,9 @@
 #endif
 
 /*a Types for axi4s32_master_slave */
-/*t t_axi4s32_master_slave_input_ptrs */
-/**
+/*t t_axi4s32_master_slave_inputs
  */
-typedef struct t_axi4s32_master_slave_input_ptrs {
+typedef struct t_axi4s32_master_slave_inputs {
     t_sl_uint64 *areset_n;
 
     t_sl_uint64 *master_axi4s_tready;
@@ -58,12 +50,12 @@ typedef struct t_axi4s32_master_slave_input_ptrs {
     t_sl_uint64 *slave_axi4s__t__user;
     t_sl_uint64 *slave_axi4s__t__id;
     t_sl_uint64 *slave_axi4s__t__dest;
-} t_axi4s32_master_slave_input_ptrs;
+} t_axi4s32_master_slave_inputs;
 
-/*t t_axi4s32_master_slave_input_values */
+/*t t_axi4s32_master_slave_input_state */
 /**
  */
-typedef struct t_axi4s32_master_slave_input_values {
+typedef struct t_axi4s32_master_slave_input_state {
     t_sl_uint64 areset_n;
 
     t_sl_uint64 master_axi4s_tready;
@@ -76,10 +68,9 @@ typedef struct t_axi4s32_master_slave_input_values {
     t_sl_uint64 slave_axi4s__t__user;
     t_sl_uint64 slave_axi4s__t__id;
     t_sl_uint64 slave_axi4s__t__dest;
-} t_axi4s32_master_slave_input_values;
+} t_axi4s32_master_slave_input_state;
 
-/*t t_axi4s32_master_slave_outputs */
-/**
+/*t t_axi4s32_master_slave_outputs 
  */
 typedef struct t_axi4s32_master_slave_outputs {
     t_sl_uint64 slave_axi4s_tready;
@@ -94,7 +85,25 @@ typedef struct t_axi4s32_master_slave_outputs {
     t_sl_uint64 master_axi4s__t__dest;
 } t_axi4s32_master_slave_outputs;
 
+/*t t_all_signals
+ */
+typedef struct t_all_signals {
+    t_axi4s32_master_slave_inputs       inputs;
+    t_axi4s32_master_slave_input_state  input_state;
+    t_axi4s32_master_slave_outputs      outputs;
+} t_all_signals;
+
 /*t c_axi4s32_master_slave */
+/*v Static descriptors */
+static int sensitivity[] = {0,1,2,3,4,5,6,7,8,-1};
+static t_se_cma_clock_desc  clock_desc_clk = {
+    "aclk", sensitivity, NULL, sensitivity, NULL,
+};
+static t_se_cma_clock_desc *clock_desc[] = {
+    &clock_desc_clk,
+    NULL
+};
+
 /**
  * Class for the 'axi4s32_master_slave' module instance
  */
@@ -113,16 +122,17 @@ public:
     void add_exec_file_enhancements(void);
     class c_axi_queue<t_axi4s> *master_fifo;
     class c_axi_queue<t_axi4s> *slave_fifo;
+    c_engine *engine;
 private:
     //void drive_pending_csr_request(void);
     //void add_pending_csr_write_request(int select, int address, unsigned int data);
-    c_engine *engine;
     int clocks_to_call;
     void *engine_handle;
     int inputs_captured;
-    t_axi4s32_master_slave_outputs outputs;
-    t_axi4s32_master_slave_input_ptrs   inputs;
-    t_axi4s32_master_slave_input_values input_values;
+    t_all_signals all_signals;
+    t_se_cma_input_desc  input_desc[12];
+    t_se_cma_output_desc output_desc[12];
+    t_se_cma_module_desc  module_desc;
     t_sl_exec_file_data *exec_file_data;
     int verbose;
     int data_width;
@@ -145,64 +155,6 @@ axi4s32_master_slave_instance_fn( c_engine *engine, void *engine_handle )
     mod = new c_axi4s32_master_slave( engine, engine_handle );
     if (!mod)
         return error_level_fatal;
-    return error_level_okay;
-}
-
-/*f axi4s32_master_slave_delete_fn - simple callback wrapper for the main method */
-static t_sl_error_level
-axi4s32_master_slave_delete_fn( void *handle )
-{
-    c_axi4s32_master_slave *mod;
-    t_sl_error_level result;
-    mod = (c_axi4s32_master_slave *)handle;
-    result = mod->delete_instance();
-    delete( mod );
-    return result;
-}
-
-/*f axi4s32_master_slave_reset_fn
-*/
-static t_sl_error_level axi4s32_master_slave_reset_fn( void *handle, int pass )
-{
-    c_axi4s32_master_slave *mod;
-    mod = (c_axi4s32_master_slave *)handle;
-    return mod->reset( pass );
-}
-
-/*f axi4s32_master_slave_prepreclock_fn */
-static t_sl_error_level
-axi4s32_master_slave_prepreclock_fn( void *handle )
-{
-    c_axi4s32_master_slave *mod;
-    mod = (c_axi4s32_master_slave *)handle;
-    return mod->prepreclock();
-}
-
-/*f axi4s32_master_slave_clock_fn */
-static t_sl_error_level
-axi4s32_master_slave_clock_fn( void *handle )
-{
-    c_axi4s32_master_slave *mod;
-    mod = (c_axi4s32_master_slave *)handle;
-    return mod->clock();
-}
-
-/*f axi4s32_master_slave_message  */
-static t_sl_error_level
-axi4s32_master_slave_message( void *handle, void *arg )
-{
-    c_axi4s32_master_slave *mod;
-    mod = (c_axi4s32_master_slave *)handle;
-    return mod->message((t_se_message *)arg );
-}
-
-/*f axi4s32_master_slave_preclock_posedge_clk_fn */
-static t_sl_error_level
-axi4s32_master_slave_preclock_posedge_clk_fn( void *handle )
-{
-    c_axi4s32_master_slave *mod;
-    mod = (c_axi4s32_master_slave *)handle;
-    mod->preclock();
     return error_level_okay;
 }
 
@@ -232,9 +184,9 @@ c_axi4s32_master_slave::c_axi4s32_master_slave( class c_engine *eng, void *eng_h
     engine = eng;
     engine_handle = eng_handle;
 
-    engine->register_delete_function( engine_handle, (void *)this, axi4s32_master_slave_delete_fn );
-    engine->register_reset_function( engine_handle, (void *)this, axi4s32_master_slave_reset_fn );
-    engine->register_message_function( engine_handle, (void *)this, axi4s32_master_slave_message );
+    engine->register_delete_function( engine_handle, [this](){delete(this);} );
+    engine->register_reset_function( engine_handle,  [this](int pass){this->reset(pass);} );
+    engine->register_message_function( engine_handle, [this](t_se_message *m){this->message(m);});
 
     verbose       = engine->get_option_int( engine_handle, "verbose", 0 );
     data_width    = engine->get_option_int( engine_handle, "data_width", 32 );
@@ -251,40 +203,40 @@ c_axi4s32_master_slave::c_axi4s32_master_slave( class c_engine *eng, void *eng_h
     master_fifo  = new c_axi_queue<t_axi4s>(master_fifo_size);
     slave_fifo  = new c_axi_queue<t_axi4s>(slave_fifo_size);
 
-    memset(&inputs, 0, sizeof(inputs));
+    memset(&all_signals, 0, sizeof(all_signals));
 
-    engine->register_prepreclock_fn( engine_handle, (void *)this, axi4s32_master_slave_prepreclock_fn );
-    engine->register_preclock_fns( engine_handle, (void *)this, "aclk", axi4s32_master_slave_preclock_posedge_clk_fn, (t_engine_callback_fn) NULL );
-    engine->register_clock_fn( engine_handle, (void *)this, "aclk", engine_sim_function_type_posedge_clock, axi4s32_master_slave_clock_fn );
+    engine->register_prepreclock_fn( engine_handle, [this](){this->prepreclock();} );
+    engine->register_clock_fns(engine_handle, "aclk",
+                               [this](){this->preclock();},
+                               [this](){this->clock();} );
 
-#define REGISTER_OUTPUT(s,w) \
-    engine->register_output_signal(engine_handle, #s, w, &outputs.s); \
-    engine->register_output_generated_on_clock(engine_handle, #s, "aclk", 1 );
-#define REGISTER_INPUT(s,w) \
-    engine->register_input_signal(engine_handle, #s, w, &inputs.s); \
-    engine->register_input_used_on_clock(engine_handle, #s, "aclk", 1 );
+#define INPUT(s,w) { #s, offsetof(t_all_signals,inputs.s),offsetof(t_all_signals,input_state.s),(char)w,0}
+#define OUTPUT(s,w) { #s, offsetof(t_all_signals,outputs.s),(char)w,0}
+    input_desc[0] = INPUT(master_axi4s_tready,1);
+    input_desc[1] = INPUT(slave_axi4s__valid,1);
+    input_desc[2] = INPUT(slave_axi4s__t__id,id_width);
+    input_desc[3] = INPUT(slave_axi4s__t__data,data_width);
+    input_desc[4] = INPUT(slave_axi4s__t__keep,keep_width);
+    input_desc[5] = INPUT(slave_axi4s__t__strb,strb_width);
+    input_desc[6] = INPUT(slave_axi4s__t__user,user_width);
+    input_desc[7] = INPUT(slave_axi4s__t__dest,dest_width);
+    input_desc[8] = INPUT(slave_axi4s__t__last,1);
+    input_desc[9] = INPUT(areset_n,1);
+    input_desc[10] = {NULL,0,0,0,0};
 
-    REGISTER_INPUT(master_axi4s_tready,1);
-    REGISTER_OUTPUT(master_axi4s__valid,1);
-    REGISTER_OUTPUT(master_axi4s__t__id,id_width);
-    REGISTER_OUTPUT(master_axi4s__t__data,data_width);
-    REGISTER_OUTPUT(master_axi4s__t__keep,keep_width);
-    REGISTER_OUTPUT(master_axi4s__t__strb,strb_width);
-    REGISTER_OUTPUT(master_axi4s__t__user,user_width);
-    REGISTER_OUTPUT(master_axi4s__t__id,id_width);
-    REGISTER_OUTPUT(master_axi4s__t__dest,dest_width);
-    REGISTER_OUTPUT(master_axi4s__t__last,1);
+    output_desc[0] = OUTPUT(slave_axi4s_tready,1);
+    output_desc[1] = OUTPUT(master_axi4s__valid,1);
+    output_desc[2] = OUTPUT(master_axi4s__t__id,id_width);
+    output_desc[3] = OUTPUT(master_axi4s__t__data,data_width);
+    output_desc[4] = OUTPUT(master_axi4s__t__keep,keep_width);
+    output_desc[5] = OUTPUT(master_axi4s__t__strb,strb_width);
+    output_desc[6] = OUTPUT(master_axi4s__t__user,user_width);
+    output_desc[7] = OUTPUT(master_axi4s__t__dest,dest_width);
+    output_desc[8] = OUTPUT(master_axi4s__t__last,1);
+    output_desc[9] = {NULL,0,0,0};
+    module_desc = {input_desc, output_desc, clock_desc };
 
-    REGISTER_OUTPUT(slave_axi4s_tready,1);
-    REGISTER_INPUT(slave_axi4s__valid,1);
-    REGISTER_INPUT(slave_axi4s__t__id,id_width);
-    REGISTER_INPUT(slave_axi4s__t__data,data_width);
-    REGISTER_INPUT(slave_axi4s__t__keep,keep_width);
-    REGISTER_INPUT(slave_axi4s__t__strb,strb_width);
-    REGISTER_INPUT(slave_axi4s__t__user,user_width);
-    REGISTER_INPUT(slave_axi4s__t__id,id_width);
-    REGISTER_INPUT(slave_axi4s__t__dest,dest_width);
-    REGISTER_INPUT(slave_axi4s__t__last,1);
+    se_cmodel_assist_module_declaration( engine, engine_handle, (void *)&(all_signals), &module_desc);
 
     exec_file_data = NULL;
     PyObject *obj = (PyObject *)(engine->get_option_object( engine_handle, "object" ));
@@ -375,12 +327,35 @@ static t_sl_error_level ef_slave_empty(t_sl_exec_file_cmd_cb *cmd_cb, void *obj,
     c_axi4s32_master_slave *axim = (c_axi4s32_master_slave *)ef_owner_of_objf(object_desc);
     return sl_exec_file_eval_fn_set_result(cmd_cb->file_data, (t_sl_uint64)axim->slave_fifo->is_empty())?error_level_okay:error_level_fatal;
 }
+static int wait_fifo_not_empty_callback( t_sl_exec_file_wait_cb *wait_cb )
+{
+    c_axi4s32_master_slave *axim = (c_axi4s32_master_slave *) wait_cb->args[ 0 ].pointer;
+    t_sl_uint64 timeout =     wait_cb->args[ 1 ].uint64;
+    if (!axim->slave_fifo->is_empty()) return 1;
+    if (((t_sl_uint64)axim->engine->cycle()) >= timeout) return 1;
+    return 0;
+}
+static t_sl_error_level ef_slave_wait_for_data(t_sl_exec_file_cmd_cb *cmd_cb, void *obj, t_sl_exec_file_object_desc *object_desc, t_sl_exec_file_method *method)
+{
+    WHERE_I_AM;
+    c_axi4s32_master_slave *axim = (c_axi4s32_master_slave *)ef_owner_of_objf(object_desc);
+    t_sl_exec_file_wait_cb wait_cb;
+
+    wait_cb.args[ 0 ].pointer = (void *)axim;
+    wait_cb.args[ 1 ].uint64 = -1ULL;
+    if (cmd_cb->num_args>0) {
+        wait_cb.args[1].uint64 = axim->engine->cycle() + sl_exec_file_eval_fn_get_argument_integer( cmd_cb->file_data, cmd_cb->args, 0 );
+    }
+    sl_exec_file_thread_wait_on_callback( cmd_cb, wait_fifo_not_empty_callback, &wait_cb );
+    return error_level_okay;
+}
 
 static t_sl_exec_file_method axi4s_obj_additional_methods[] =
 {
-    {"master_enqueue", 'i',  1, "i",  "master_enqueue(<delay>)", ef_master_enqueue, NULL },
-    {"slave_dequeue",  'i',  0, "i",  "slave_dequeue()",         ef_slave_dequeue, NULL },
-    {"slave_empty",    'i',  0, "i",  "slave_empty()",           ef_slave_empty, NULL },
+    {"master_enqueue",      'i',  1, "i",  "master_enqueue(<delay>)", ef_master_enqueue, NULL },
+    {"slave_dequeue",       'i',  0, "i",  "slave_dequeue()",         ef_slave_dequeue, NULL },
+    {"slave_empty",         'i',  0, "i",  "slave_empty()",           ef_slave_empty, NULL },
+    {"slave_wait_for_data",   0,  0, "i",  "slave_wait_for_data(global cycle timeout)",           ef_slave_wait_for_data, NULL },
     SL_EXEC_FILE_METHOD_NONE
 };
 static int ef_fn_axi4s(void *handle, t_sl_exec_file_data *file_data, t_sl_exec_file_value *args)
@@ -410,7 +385,7 @@ void c_axi4s32_master_slave::add_exec_file_enhancements(void)
     lib_desc.file_fns  = ef_fns;
     sl_exec_file_add_library( exec_file_data, &lib_desc );
 
-    engine->bfm_add_exec_file_enhancements( exec_file_data, engine_handle, "aclk", 1 );
+    engine->bfm_add_exec_file_enhancements( exec_file_data, engine_handle, "clk", 1 );
 }
 
 /*a Class preclock/clock methods for axi4s32_master_slave
@@ -423,16 +398,16 @@ void c_axi4s32_master_slave::add_exec_file_enhancements(void)
 t_sl_error_level
 c_axi4s32_master_slave::capture_inputs( void )
 {
-    input_values.master_axi4s_tready = inputs.master_axi4s_tready[0];
+    all_signals.input_state.master_axi4s_tready = all_signals.inputs.master_axi4s_tready[0];
 
-    input_values.slave_axi4s__valid = inputs.slave_axi4s__valid[0];
-    input_values.slave_axi4s__t__keep = inputs.slave_axi4s__t__keep[0];
-    input_values.slave_axi4s__t__strb = inputs.slave_axi4s__t__strb[0];
-    input_values.slave_axi4s__t__data = inputs.slave_axi4s__t__data[0];
-    input_values.slave_axi4s__t__last = inputs.slave_axi4s__t__last[0];
-    input_values.slave_axi4s__t__user = inputs.slave_axi4s__t__user[0];
-    input_values.slave_axi4s__t__id = inputs.slave_axi4s__t__id[0];
-    input_values.slave_axi4s__t__dest = inputs.slave_axi4s__t__dest[0];
+    all_signals.input_state.slave_axi4s__valid   = all_signals.inputs.slave_axi4s__valid[0];
+    all_signals.input_state.slave_axi4s__t__keep = all_signals.inputs.slave_axi4s__t__keep[0];
+    all_signals.input_state.slave_axi4s__t__strb = all_signals.inputs.slave_axi4s__t__strb[0];
+    all_signals.input_state.slave_axi4s__t__data = all_signals.inputs.slave_axi4s__t__data[0];
+    all_signals.input_state.slave_axi4s__t__last = all_signals.inputs.slave_axi4s__t__last[0];
+    all_signals.input_state.slave_axi4s__t__user = all_signals.inputs.slave_axi4s__t__user[0];
+    all_signals.input_state.slave_axi4s__t__id   = all_signals.inputs.slave_axi4s__t__id[0];
+    all_signals.input_state.slave_axi4s__t__dest = all_signals.inputs.slave_axi4s__t__dest[0];
 
     return error_level_okay;
 }
@@ -504,44 +479,44 @@ c_axi4s32_master_slave::clock( void )
 
     /*b Handle master
      */
-    if (outputs.master_axi4s__valid && input_values.master_axi4s_tready) {
-        outputs.master_axi4s__valid = 0;
-        outputs.master_axi4s__t__data = 0;
-        outputs.master_axi4s__t__strb = 0;
-        outputs.master_axi4s__t__keep = 0;
-        outputs.master_axi4s__t__last = 0;
-        outputs.master_axi4s__t__user = 0;
-        outputs.master_axi4s__t__id = 0;
-        outputs.master_axi4s__t__dest = 0;
+    if (all_signals.outputs.master_axi4s__valid && all_signals.input_state.master_axi4s_tready) {
+        all_signals.outputs.master_axi4s__valid = 0;
+        all_signals.outputs.master_axi4s__t__data = 0;
+        all_signals.outputs.master_axi4s__t__strb = 0;
+        all_signals.outputs.master_axi4s__t__keep = 0;
+        all_signals.outputs.master_axi4s__t__last = 0;
+        all_signals.outputs.master_axi4s__t__user = 0;
+        all_signals.outputs.master_axi4s__t__id = 0;
+        all_signals.outputs.master_axi4s__t__dest = 0;
     }
-    if (!outputs.master_axi4s__valid && !master_fifo->is_empty()) {
+    if (!all_signals.outputs.master_axi4s__valid && !master_fifo->is_empty()) {
         t_axi4s axi4s;
         int delay;
         master_fifo->dequeue(&axi4s, &delay);
-        outputs.master_axi4s__valid = 1;
-        outputs.master_axi4s__t__data = axi4s.data;
-        outputs.master_axi4s__t__strb = axi4s.strb;
-        outputs.master_axi4s__t__keep = axi4s.keep;
-        outputs.master_axi4s__t__last = axi4s.last;
-        outputs.master_axi4s__t__user = axi4s.user;
-        outputs.master_axi4s__t__id   = axi4s.id;
-        outputs.master_axi4s__t__dest = axi4s.dest;
+        all_signals.outputs.master_axi4s__valid = 1;
+        all_signals.outputs.master_axi4s__t__data = axi4s.data;
+        all_signals.outputs.master_axi4s__t__strb = axi4s.strb;
+        all_signals.outputs.master_axi4s__t__keep = axi4s.keep;
+        all_signals.outputs.master_axi4s__t__last = axi4s.last;
+        all_signals.outputs.master_axi4s__t__user = axi4s.user;
+        all_signals.outputs.master_axi4s__t__id   = axi4s.id;
+        all_signals.outputs.master_axi4s__t__dest = axi4s.dest;
     }
 
     /*b Handle slave
      */
-    if (input_values.slave_axi4s__valid && outputs.slave_axi4s_tready) {
+    if (all_signals.input_state.slave_axi4s__valid && all_signals.outputs.slave_axi4s_tready) {
         t_axi4s axi4s;
-        axi4s.data = input_values.slave_axi4s__t__data;
-        axi4s.strb = input_values.slave_axi4s__t__strb;
-        axi4s.keep = input_values.slave_axi4s__t__keep;
-        axi4s.last = input_values.slave_axi4s__t__last;
-        axi4s.user = input_values.slave_axi4s__t__user;
-        axi4s.id   = input_values.slave_axi4s__t__id  ;
-        axi4s.dest = input_values.slave_axi4s__t__dest ;
+        axi4s.data = all_signals.input_state.slave_axi4s__t__data;
+        axi4s.strb = all_signals.input_state.slave_axi4s__t__strb;
+        axi4s.keep = all_signals.input_state.slave_axi4s__t__keep;
+        axi4s.last = all_signals.input_state.slave_axi4s__t__last;
+        axi4s.user = all_signals.input_state.slave_axi4s__t__user;
+        axi4s.id   = all_signals.input_state.slave_axi4s__t__id  ;
+        axi4s.dest = all_signals.input_state.slave_axi4s__t__dest ;
         slave_fifo->enqueue(&axi4s, 0);
     }
-    outputs.slave_axi4s_tready = !slave_fifo->is_full();
+    all_signals.outputs.slave_axi4s_tready = !slave_fifo->is_full();
 
     /*b All done
      */
@@ -552,8 +527,11 @@ c_axi4s32_master_slave::clock( void )
 */
 t_sl_error_level c_axi4s32_master_slave::reset( int pass )
 {
-    memset(&input_values, 0, sizeof(input_values));
-    memset(&outputs, 0, sizeof(outputs));
+    if (pass==0) {
+        se_cmodel_assist_check_unconnected_inputs( engine, engine_handle, (void *)&all_signals, input_desc, "axi4s32_master_slave");
+    }
+    memset(&all_signals.input_state, 0, sizeof(all_signals.input_state));
+    memset(&all_signals.outputs,     0, sizeof(all_signals.outputs));
     return error_level_okay;
 }
 /*a Initialization functions */

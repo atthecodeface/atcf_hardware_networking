@@ -1,0 +1,161 @@
+/** @copyright (C) 2016-2017,  Gavin J Stark.  All rights reserved.
+ *
+ * @copyright
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0.
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ *
+ * @file   apb_target_sram_interface.cdl
+ * @brief  APB bus target to drive an SRAM read/write request
+ *
+ * CDL implementation of a simple APB target to interface to an SRAM
+ * read/write request/response bus.
+ *
+ */
+/*a Includes
+ */
+include "std::srams.h"
+include "utils::sram_access.h"
+include "utils::fifo_status.h"
+include "apb::apb.h"
+include "apb::apb_targets.h"
+include "axi4s.h"
+include "axi4s_modules.h"
+
+/*a Constants */
+constant integer tx_poll_count_restart_value=10;
+
+/*a Module */
+module tb_apb_target_axi4s( clock aclk         "System clock",
+                            input bit areset_n "Active low reset",
+
+                            input  t_apb_request  apb_request  "APB request",
+                            output t_apb_response apb_response "APB response",
+
+                            input bit        slave_axi4s_tready,
+                            output t_axi4s32 slave_axi4s,
+                            input t_axi4s32  master_axi4s,
+                            output bit       master_axi4s_tready
+    )
+{
+    comb  t_apb_request  axi4s_apb_request  "APB request";
+    comb  t_apb_request  tx_sram_apb_request  "APB request";
+    comb  t_apb_request  rx_sram_apb_request  "APB request";
+    net t_apb_response axi4s_apb_response "APB response";
+    net t_apb_response tx_sram_apb_response "APB response";
+    net t_apb_response rx_sram_apb_response "APB response";
+
+    net t_axi4s32 slave_axi4s;
+    net bit       master_axi4s_tready;
+
+    net t_sram_access_req  tx_sram_access_req  "SRAM access request";
+    net t_sram_access_req  tx_apb_sram_access_req  "SRAM access request";
+    net  t_sram_access_resp tx_sram_access_resp;
+    net  t_sram_access_resp tx_apb_sram_access_resp;
+    net  t_sram_access_req  tx_sram_req;
+    comb t_sram_access_resp tx_sram_resp;
+    net bit[32] tx_sram_data_out;
+
+    net t_sram_access_req  rx_sram_access_req  "SRAM access request";
+    net t_sram_access_req  rx_apb_sram_access_req  "SRAM access request";
+    net  t_sram_access_resp rx_sram_access_resp;
+    net  t_sram_access_resp rx_apb_sram_access_resp;
+    net  t_sram_access_req  rx_sram_req;
+    comb t_sram_access_resp rx_sram_resp;
+    net bit[32] rx_sram_data_out;
+
+    code: {
+        apb_target_axi4s dut( clk <- aclk,
+                          reset_n <= areset_n,
+
+                          apb_request  <= axi4s_apb_request,
+                          apb_response => axi4s_apb_response,
+
+                          tx_sram_access_req => tx_sram_access_req,
+                          rx_sram_access_req => rx_sram_access_req,
+                          tx_sram_access_resp <= tx_sram_access_resp,
+                          rx_sram_access_resp <= rx_sram_access_resp,
+
+                          tx_axi4s_tready <= slave_axi4s_tready,
+                          tx_axi4s => slave_axi4s,
+                          rx_axi4s <= master_axi4s,
+                          rx_axi4s_tready => master_axi4s_tready );
+
+        apb_target_sram_interface tx_sram_apb( clk <- aclk, reset_n <= areset_n,
+                                               apb_request  <= tx_sram_apb_request,
+                                               apb_response  => tx_sram_apb_response,
+                                               // sram_ctrl => ,
+                                               sram_access_req  => tx_apb_sram_access_req,
+                                               sram_access_resp <= tx_apb_sram_access_resp );
+
+        apb_target_sram_interface rx_sram_apb( clk <- aclk, reset_n <= areset_n,
+                                               apb_request  <= rx_sram_apb_request,
+                                               apb_response  => rx_sram_apb_response,
+                                               // sram_ctrl => ,
+                                               sram_access_req  => rx_apb_sram_access_req,
+                                               sram_access_resp <= rx_apb_sram_access_resp );
+
+        axi4s_apb_request     = apb_request;
+        tx_sram_apb_request   = apb_request;
+        rx_sram_apb_request   = apb_request;
+        axi4s_apb_request.psel = apb_request.psel && (apb_request.paddr[4;16]==0);
+        tx_sram_apb_request.psel = apb_request.psel && (apb_request.paddr[4;16]==2);
+        rx_sram_apb_request.psel = apb_request.psel && (apb_request.paddr[4;16]==3);
+
+        apb_response  = axi4s_apb_response;
+        apb_response |= tx_sram_apb_response;
+        apb_response |= rx_sram_apb_response;
+        apb_response.pready  = axi4s_apb_response.pready;
+        apb_response.pready  = apb_response.pready   & tx_sram_apb_response.pready;
+        apb_response.pready  = apb_response.pready   & rx_sram_apb_response.pready;
+
+        sram_access_mux_2 tx_sram_mux( clk<-aclk, reset_n<=areset_n,
+                                       req_a  <= tx_sram_access_req,
+                                       resp_a => tx_sram_access_resp,
+
+                                       req_b  <= tx_apb_sram_access_req,
+                                       resp_b => tx_apb_sram_access_resp,
+
+                                       req => tx_sram_req,
+                                       resp <= tx_sram_resp );
+
+        se_sram_srw_65536x32 tx_sram( sram_clock <- aclk,
+                                      select <= tx_sram_req.valid,
+                                      address <= tx_sram_req.address[16;0],
+                                      read_not_write <= tx_sram_req.read_not_write,
+                                      write_enable <= !tx_sram_req.read_not_write,
+                                      write_data <= tx_sram_req.write_data[32;0],
+                                      data_out => tx_sram_data_out );
+        tx_sram_resp = {*=0};
+        tx_sram_resp.ack = 1; // dedicated to sram access ports
+        tx_sram_resp.data[32;0]  = tx_sram_data_out;
+
+        sram_access_mux_2 rx_sram_mux( clk<-aclk, reset_n<=areset_n,
+                                       req_a  <= rx_sram_access_req,
+                                       resp_a => rx_sram_access_resp,
+
+                                       req_b  <= rx_apb_sram_access_req,
+                                       resp_b => rx_apb_sram_access_resp,
+
+                                       req => rx_sram_req,
+                                       resp <= rx_sram_resp );
+
+        se_sram_srw_65536x32 rx_sram( sram_clock <- aclk,
+                                      select <= rx_sram_req.valid,
+                                      address <= rx_sram_req.address[16;0],
+                                      read_not_write <= rx_sram_req.read_not_write,
+                                      write_enable <= !rx_sram_req.read_not_write,
+                                      write_data <= rx_sram_req.write_data[32;0],
+                                      data_out => rx_sram_data_out );
+        rx_sram_resp = {*=0};
+        rx_sram_resp.ack = 1; // dedicated to sram access ports
+        rx_sram_resp.data[32;0]  = rx_sram_data_out;
+
+    }
+}

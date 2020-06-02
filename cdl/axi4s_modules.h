@@ -21,6 +21,7 @@
 
 /*a Includes */
 include "apb::apb.h"
+include "utils::fifo_status.h"
 include "axi4s.h"
 
 /*m axi4s32_fifo_4 */
@@ -30,7 +31,8 @@ module axi4s32_fifo_4( clock clk                      "Clock for the FIFO",
                        input t_axi4s32 req_in         "AXI4S input side master data",
                        output bit ack_in              "AXI4S input side slave 'tready' signal",
                        output t_axi4s32 req_out       "AXI4S output side master data",
-                       input bit ack_out              "AXI4S output side slave 'tready' signal"
+                       input bit ack_out              "AXI4S output side slave 'tready' signal",
+                       output t_fifo_status fifo_status "Standard FIFO status"
     )
 {
     timing to    rising clock clk req_in;
@@ -38,6 +40,8 @@ module axi4s32_fifo_4( clock clk                      "Clock for the FIFO",
 
     timing from  rising clock clk req_out;
     timing to    rising clock clk ack_out;
+
+    timing from  rising clock clk fifo_status;
 }
 
 /*m apb_target_axi4s */
