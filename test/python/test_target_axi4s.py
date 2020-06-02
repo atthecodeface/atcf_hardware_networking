@@ -83,7 +83,7 @@ class Axi4sTestBase(ThExecFile):
         tx_addr.write(0)
         tx_data.write(63) # 63 byte packet!
         self.verbose.error("%d %d"%(self.global_cycle(),self.banana.slave_empty()))
-        for i in range(120):
+        for i in range(12):
             self.banana.slave_wait_for_data()
             self.banana.slave_dequeue()
             print(self.banana.get("data"))
