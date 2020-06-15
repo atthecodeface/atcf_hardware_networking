@@ -187,12 +187,14 @@ c_axi_queue<T>::c_axi_queue(int max_size)
     count = 0;
     head = NULL;
     tail = NULL;
+    // fprintf(stderr, "c_axi_queue Create\n");
 }
 
 /*f c_axi_queue<t> destructor */
 template <typename T>
 c_axi_queue<T>::~c_axi_queue()
 {
+    // fprintf(stderr, "c_axi_queue Delete\n");
 }
 
 /*f c_axi_queue<t> enqueue */

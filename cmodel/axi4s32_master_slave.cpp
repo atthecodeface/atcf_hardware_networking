@@ -38,7 +38,6 @@
 /*t t_axi4s32_master_slave_inputs
  */
 typedef struct t_axi4s32_master_slave_inputs {
-    t_sl_uint64 *areset_n;
 
     t_sl_uint64 *master_axi4s_tready;
 
@@ -56,7 +55,6 @@ typedef struct t_axi4s32_master_slave_inputs {
 /**
  */
 typedef struct t_axi4s32_master_slave_input_state {
-    t_sl_uint64 areset_n;
 
     t_sl_uint64 master_axi4s_tready;
 
@@ -202,7 +200,7 @@ c_axi4s32_master_slave::c_axi4s32_master_slave( class c_engine *eng, void *eng_h
 
     master_fifo  = new c_axi_queue<t_axi4s>(master_fifo_size);
     slave_fifo  = new c_axi_queue<t_axi4s>(slave_fifo_size);
-
+    // fprintf(stderr,"Create\n");
     memset(&all_signals, 0, sizeof(all_signals));
 
     engine->register_prepreclock_fn( engine_handle, [this](){this->prepreclock();} );
@@ -221,8 +219,7 @@ c_axi4s32_master_slave::c_axi4s32_master_slave( class c_engine *eng, void *eng_h
     input_desc[6] = INPUT(slave_axi4s__t__user,user_width);
     input_desc[7] = INPUT(slave_axi4s__t__dest,dest_width);
     input_desc[8] = INPUT(slave_axi4s__t__last,1);
-    input_desc[9] = INPUT(areset_n,1);
-    input_desc[10] = {NULL,0,0,0,0};
+    input_desc[9] = {NULL,0,0,0,0};
 
     output_desc[0] = OUTPUT(slave_axi4s_tready,1);
     output_desc[1] = OUTPUT(master_axi4s__valid,1);
@@ -254,7 +251,9 @@ c_axi4s32_master_slave::c_axi4s32_master_slave( class c_engine *eng, void *eng_h
  */
 c_axi4s32_master_slave::~c_axi4s32_master_slave()
 {
+    // fprintf(stderr,"Delete\n");
     delete_instance();
+    // fprintf(stderr,"Deleted\n");
 }
 
 /*f c_axi4s32_master_slave::delete_instance */
@@ -263,11 +262,12 @@ c_axi4s32_master_slave::~c_axi4s32_master_slave()
  */
 t_sl_error_level c_axi4s32_master_slave::delete_instance( void )
 {
-    if (exec_file_data )
-    {
+    // fprintf(stderr,"delete_instance %p\n",exec_file_data);
+    if (exec_file_data) {
         sl_exec_file_free( exec_file_data );
         exec_file_data = NULL;
     }
+    // fprintf(stderr,"deleted_instance\n");
     return error_level_okay;
 }
 
@@ -377,15 +377,17 @@ void c_axi4s32_master_slave::add_exec_file_enhancements(void)
 
     sl_exec_file_set_environment_interrogation( exec_file_data, (t_sl_get_environment_fn)sl_option_get_string, (void *)engine->get_option_list( engine_handle ) );
 
+    memset(&lib_desc,0,sizeof(lib_desc));
     lib_desc.version = sl_ef_lib_version_cmdcb;
     lib_desc.library_name = "axi_bfm";
     lib_desc.handle = (void *)this;
     lib_desc.cmd_handler = NULL;//exec_file_cmd_handler_cb;
     lib_desc.file_cmds = NULL;//ef_cmds;
     lib_desc.file_fns  = ef_fns;
+    lib_desc.free_fn = NULL;
     sl_exec_file_add_library( exec_file_data, &lib_desc );
 
-    engine->bfm_add_exec_file_enhancements( exec_file_data, engine_handle, "clk", 1 );
+    engine->bfm_add_exec_file_enhancements( exec_file_data, engine_handle, "aclk", 1 );
 }
 
 /*a Class preclock/clock methods for axi4s32_master_slave

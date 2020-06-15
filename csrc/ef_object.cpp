@@ -141,6 +141,7 @@ extern void *ef_object_create( t_sl_exec_file_data *file_data, const char *name,
     num_methods += i;
 
     t_ef_object *ef_obj = (t_ef_object *)malloc( sizeof(t_ef_object) + (num_methods)*sizeof(t_sl_exec_file_method) );
+    // fprintf(stderr, "ef_object_create %p owner %p\n",ef_obj,owner);
     if (ef_obj)
     {
         memset( ef_obj, 0, sizeof(t_ef_object) );

@@ -19,6 +19,29 @@
 from cdl.utils.csr   import Csr, CsrField, CsrFieldZero, Map, MapCsr, CsrFieldResvd
 
 #a CSRs
+class CommitCsr(Csr):
+    _fields = { 0:   CsrFieldResvd(width=32),
+              }
+
+class TxPtrCsr(Csr):
+    _fields = { 0:   CsrField(width=16, name="buffer_addr", brief="bufadr", doc="Address for transmit data accesses through tx data CSRs"),
+                16:  CsrField(width=16, name="axi_addr",    brief="axiadr", doc="Address of SRAM being used by AXI transmitter; read-only"),
+              }
+
+class RxPtrCsr(Csr):
+    _fields = { 0:   CsrField(width=16, name="buffer_addr", brief="bufadr", doc="Address for receive data accesses through rx data CSRs"),
+                16:  CsrField(width=16, name="axi_addr",    brief="axiadr", doc="Address of SRAM being used by AXI receiver; read-only"),
+              }
+
+class DataCsr(Csr):
+    _fields = { 0:   CsrField(width=32, name="data", brief="data", doc=""),
+              }
+
+class ConfigBufferCsr(Csr):
+    _fields = { 0:   CsrField(width=16, name="buffer_end", brief="bufend", doc=""),
+                16:  CsrFieldResvd(width=16),
+              }
+
 class ConfigCsr(Csr):
     _fields = { 0:  CsrField(width=1, name="rx_reset", brief="rxrst", doc=""),
                 1:  CsrField(width=1, name="rx_init", brief="rxrst", doc=""),
@@ -28,17 +51,13 @@ class ConfigCsr(Csr):
               }
 
 class Axi4sAddressMap(Map):
-    _map = [ MapCsr(reg=0, name="config",    brief="cfg",  csr=ConfigCsr, doc=""),
+    _map = [ MapCsr(reg=0,  name="config",       brief="cfg",    csr=ConfigCsr, doc=""),
+             MapCsr(reg=2,  name="rx_config",    brief="rxcfg",  csr=ConfigBufferCsr, doc=""),
+             MapCsr(reg=3,  name="rx_ptr",       brief="rxptr",  csr=RxPtrCsr, doc=""),
+             MapCsr(reg=4,  name="rx_data",      brief="rxd",    csr=DataCsr, doc=""),
+             MapCsr(reg=5,  name="rx_data_inc",  brief="rxdinc", csr=DataCsr, doc=""),
+             MapCsr(reg=8,  name="tx_config",    brief="txcfg",  csr=ConfigBufferCsr, doc=""),
+             MapCsr(reg=9,  name="tx_ptr",       brief="txptr",  csr=TxPtrCsr, doc=""),
+             MapCsr(reg=10, name="tx_data",      brief="txd",    csr=DataCsr, doc=""),
+             MapCsr(reg=11, name="tx_data_inc",  brief="txdinc", csr=DataCsr, doc=""),
              ]
-#    apb_address_config      = 0   "Global configuration",
-#    apb_address_debug       = 1   "Global configuration",
-#    apb_address_rx_config      = 2   "Receive configuration",
-#    apb_address_rx_data_ptr    = 3   "Receive data pointer",
-#    apb_address_rx_data        = 4   "Receive data",
-#    apb_address_rx_data_next   = 5   "Receive data and move on",
-#    apb_address_rx_commit      = 6   "Mark current receive data pointer as head of read",
-#    apb_address_tx_config      = 8   "Transmit configuration",
-#    apb_address_tx_data_ptr    = 9   "Transmit data pointer",
-#    apb_address_tx_data        = 10  "Transmit data",
-#    apb_address_tx_data_next   = 11  "Transmit data and move on",
-#             
