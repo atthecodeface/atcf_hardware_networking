@@ -60,7 +60,7 @@ class Axi4sT(object):
         self.last = last
         pass
     def compare(self, th, axi4s):
-        th.compare_expected("axi4s data %s"%(str(self)), self.data, axi4s.get("data"))
+        th.compare_expected("axi4s data %s / %08x"%(str(self),axi4s.get("data")), self.data, axi4s.get("data"))
         th.compare_expected("axi4s last %s"%(str(self)), self.last, axi4s.get("last"))
         th.compare_expected("axi4s strb %s"%(str(self)), self.strb, axi4s.get("strb"))
         return
@@ -153,7 +153,11 @@ class Axi4sTestBase(ThExecFile):
                 pass
             pass
         self.tx_sram_data_inc.write(data)
-        self.tx_sram_address = (self.tx_sram_address+1) % self.tx_buffer_end
+        self.tx_sram_address = self.tx_sram_address+1
+        if self.tx_sram_address == self.tx_buffer_end:
+            self.tx_sram_address = 0
+            self.tx_sram_addr.write(0)
+            pass
         pass
     #f tx_update_pkt_axi_addr
     def tx_update_pkt_axi_addr(self):
@@ -202,6 +206,7 @@ class Axi4sTestBase(ThExecFile):
         num_bytes = 4+random.randrange(100)
         num_words = (num_bytes+3) // 4
         last_bytes = num_bytes - 4*(num_words-1)
+        # print(last_bytes)
         data = [rand_int32(random) for i in range(num_words)]
         self.tx_packet(user=user, data=data, last_bytes=last_bytes)
         pass
@@ -214,8 +219,8 @@ class Axi4sTestBase(ThExecFile):
             while not self.tx_checker_axi.slave_empty():
                 self.tx_checker_axi.slave_dequeue()
                 if self.expected_tx_axi4s == []:
-                    self.failtest("AXI4S slave got tx data, but nothing was expected")
-                    pass
+                    self.failtest("AXI4S slave got tx data, but nothing was expected, aborting")
+                    return
                 e = self.expected_tx_axi4s.pop(0)
                 e.compare(self,self.tx_checker_axi)
                 pass
@@ -322,7 +327,7 @@ class ApbTargetAxi4s_Msg(TestCase):
     _tests = {
         "tx_0"        :  (Axi4sTest_Tx_0,40*1000,  kwargs),
         "tx_1"        :  (Axi4sTest_Tx_1,40*1000,  kwargs),
-        "tx_random_0" :  (Axi4sTest_Tx_Random_0,43*1000,  kwargs),
+        "tx_random_0" :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
     }
     pass
 
@@ -335,7 +340,7 @@ class ApbTargetAxi4s_Axi(ApbTargetAxi4s_Msg):
     _tests = {
         "tx_0"        :  (Axi4sTest_Tx_0,40*1000,  kwargs),
         "tx_1"        :  (Axi4sTest_Tx_1,40*1000,  kwargs),
-        "tx_random_0" :  (Axi4sTest_Tx_Random_0,43*1000,  kwargs),
+        "tx_random_0" :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
     }
     pass
 
@@ -348,8 +353,8 @@ class ApbTargetAxi4s_Apb(ApbTargetAxi4s_Msg):
     _tests = {
         "tx_0"        :  (Axi4sTest_Tx_0,40*1000,  kwargs),
         "tx_1"        :  (Axi4sTest_Tx_1,40*1000,  kwargs),
-        "tx_random_0" :  (Axi4sTest_Tx_Random_0,43*1000,  kwargs),
-        "smoke"       :  (Axi4sTest_Tx_Random_0,43*1000,  kwargs),
+        "tx_random_0" :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
+        "smoke"       :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
     }
     pass
 
