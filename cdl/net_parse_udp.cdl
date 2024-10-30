@@ -1,0 +1,22 @@
+/*a Includes
+ */
+include "parse.h"
+
+/*a Module */
+module net_parse_udp(
+    input bit[64] data0,
+
+    output t_udp_hdr udp_hdr
+
+    )
+"""
+"""
+{
+    udp_parse """
+    """ : {
+        udp_hdr.src = bundle(data0[8;0], data0[8;8]);
+        udp_hdr.dst = bundle(data0[8;16], data0[8;24]);
+        udp_hdr.len = bundle(data0[8;32], data0[8;40]);
+        udp_hdr.csum = bundle(data0[8;48], data0[8;56]);
+    }
+ }

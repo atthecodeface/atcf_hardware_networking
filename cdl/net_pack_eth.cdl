@@ -1,0 +1,37 @@
+/*a Includes
+ */
+include "parse.h"
+
+/*a Module */
+module net_pack_eth(
+    input t_eth_hdr eth_hdr,
+    output bit[64] data0,
+    output bit[48] data1
+    )
+"""
+"""
+{
+
+    ethernet_pack: {
+        data1 = bundle(
+            eth_hdr.proto[8;0],
+            eth_hdr.proto[8;8],
+
+            eth_hdr.smac[8;0],
+            eth_hdr.smac[8;8],
+            eth_hdr.smac[8;16],
+            eth_hdr.smac[8;24]
+                );
+        data0 = bundle(
+            eth_hdr.smac[8;32],
+            eth_hdr.smac[8;40],
+
+            eth_hdr.dmac[8;0],
+            eth_hdr.dmac[8;8],
+            eth_hdr.dmac[8;16],
+            eth_hdr.dmac[8;24],
+            eth_hdr.dmac[8;32],
+            eth_hdr.dmac[8;40]
+            );
+    }
+}

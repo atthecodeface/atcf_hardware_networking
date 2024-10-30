@@ -1,0 +1,40 @@
+/*a Includes
+ */
+include "parse.h"
+
+/*a Module */
+module net_parse_ipv4(
+    input bit[64] data0,
+    input bit[64] data1,
+    input bit[64] data2,
+
+    output t_ipv4_hdr ipv4_hdr
+
+    )
+"""
+    Parse an IPv4 header with no options
+
+    Mark it as valid if it has no options, is not fragmented, etc
+
+    Ignore CSUM here
+"""
+{
+    ipv4_parse  """
+    """: {
+        ipv4_hdr.version = data0[4;4];
+        ipv4_hdr.hdr_len = data0[4;0];
+        ipv4_hdr.dscp = data0[8;8];
+        ipv4_hdr.len  = bundle(data0[8;16], data0[8;24]);
+        ipv4_hdr.id   = bundle(data0[8;32], data0[8;40]);
+        ipv4_hdr.frag = bundle(data0[8;48], data0[8;56]);
+        ipv4_hdr.ttl = data1[8;0];
+        ipv4_hdr.proto = data1[8;8];
+        ipv4_hdr.csum      = bundle(data1[8;16], data1[8;24]);
+        ipv4_hdr.src       = bundle(data1[8;32], data1[8;40], data1[8;48], data1[8;56]);
+        ipv4_hdr.dst       = bundle(data2[8;0], data2[8;8], data2[8;16], data2[8;24]);
+
+        ipv4_hdr.valid_vh   = (ipv4_hdr.version==4) && (ipv4_hdr.hdr_len==5);
+        ipv4_hdr.valid_frag = (ipv4_hdr.frag[14;0] == 0);
+        ipv4_hdr.valid_ttl  = (ipv4_hdr.ttl != 0);
+    }
+}

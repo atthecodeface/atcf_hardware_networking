@@ -1,0 +1,22 @@
+/*a Includes
+ */
+include "parse.h"
+
+/*a Module */
+module net_parse_eth(
+    input bit[64] data0,
+    input bit[64] data1,
+    output t_eth_hdr eth_hdr
+    )
+"""
+"""
+{
+
+    ethernet_parse: {
+        eth_hdr.dmac = bundle(data0[8;0], data0[8;8], data0[8;16], data0[8;24], data0[8;32], data0[8;40]);
+        eth_hdr.smac = bundle(data0[8;48], data0[8;56], data1[8;0], data1[8;8], data1[8;16], data1[8;24]);
+        eth_hdr.proto = bundle(data1[8;32], data1[8;40]);
+    
+        eth_hdr.is_bcast = (eth_hdr.dmac == 48hffffffffffff);
+    }
+}

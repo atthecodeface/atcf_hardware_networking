@@ -46,6 +46,12 @@ class Axi4sModules(cdl_desc.Modules):
     modules += [ CdlModule("axi4s_process") ]
     modules += [ CdlModule("axi4s_process8_map_udp") ]
     modules += [ CdlModule("tb_apb_target_axi4s", src_dir="tb_cdl") ]
+    modules += [ CdlModule("net_parse_eth") ]
+    modules += [ CdlModule("net_pack_eth") ]
+    modules += [ CdlModule("net_parse_ipv4") ]
+    modules += [ CdlModule("net_pack_ipv4") ]
+    modules += [ CdlModule("net_parse_udp") ]
+    modules += [ CdlModule("net_pack_udp") ]
     pass
 
 class Axi4sBFM(cdl_desc.Modules):

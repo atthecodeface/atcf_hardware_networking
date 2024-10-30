@@ -1,0 +1,45 @@
+/*a Includes
+ */
+include "parse.h"
+
+/*a Module */
+module net_pack_ipv4(
+    input t_ipv4_hdr ipv4_hdr,
+
+    output bit[64] data0,
+    output bit[64] data1,
+    output bit[32] data2
+
+    )
+"""
+    Pack an IPv4 header with no options
+"""
+{
+    ipv4_pack  """
+    """: {
+        data0 = bundle( ipv4_hdr.frag[8;0],
+                        ipv4_hdr.frag[8;8],
+                        ipv4_hdr.id[8;0],
+                        ipv4_hdr.id[8;8],
+                        ipv4_hdr.len[8;0],
+                        ipv4_hdr.len[8;8],
+                        ipv4_hdr.dscp,
+                        ipv4_hdr.version,
+                        ipv4_hdr.hdr_len );
+
+        data1 = bundle( ipv4_hdr.src[8;0],
+                        ipv4_hdr.src[8;8],                        
+                        ipv4_hdr.src[8;16],                        
+                        ipv4_hdr.src[8;24],                        
+                        ipv4_hdr.csum[8;0],                        
+                        ipv4_hdr.csum[8;8],                        
+                        ipv4_hdr.proto,
+                        ipv4_hdr.ttl );
+
+        data2 = bundle( ipv4_hdr.dst[8;0],
+                        ipv4_hdr.dst[8;8],                        
+                        ipv4_hdr.dst[8;16],                        
+                        ipv4_hdr.dst[8;24]
+            );
+    }
+}
