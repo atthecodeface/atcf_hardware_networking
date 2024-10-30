@@ -1,0 +1,206 @@
+/** @copyright (C) 2016-2017,  Gavin J Stark.  All rights reserved.
+ *
+ * @copyright
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0.
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ *
+ * @file   axi4s_process.cdl
+ * @brief  AXI pipeline with a process function invoked on the first N AXI4s words
+ *
+ * CDL implementation of an arbitrary AXI4S header processor
+ *
+ */
+/*a Includes
+ */
+include "axi4s.h"
+
+/*t t_ob_combs */
+typedef struct {
+    bit can_push "Directly from the state, indicating that there is space";
+    t_axi4s64 data_out "Data out directly from state";
+    t_axi4s64 push_data "Set by the consumer to indicate what data to push (must be valid if push, can be valid if not push)";
+    bit push "Asserted to push into the buffer; must be deasserted if !can_push";
+    bit pop "Asserted to pop the push_data; must only be asserted if push_data is valid";
+} t_ob_combs;
+
+/*t t_ob_state */
+typedef struct {
+    t_axi4s64 data0;
+    t_axi4s64 data1;
+    bit     to_be_pushed;
+    bit     to_be_popped;
+} t_ob_state;
+
+/*t t_ib_combs */
+typedef struct {
+    bit[2] valid;
+    t_axi4s64 combination;
+    bit[2] would_consume;
+    bit[2] consume;
+    bit push;
+} t_ib_combs;
+
+/*a Module */
+module axi4s32_to_axi4s64( clock clk         "System clock",
+                           input bit reset_n "Active low reset",
+
+                           input t_axi4s32  rx_axi4s,
+                           output bit       rx_axi4s_tready,
+                           input bit        tx_axi4s_tready,
+                           output t_axi4s64 tx_axi4s
+    )
+"""
+Width converter from 32-bit to 64-bit AXI4s
+
+Drops alternate user/dest fields
+
+Merges 
+"""
+{
+    /*b Clock and reset */
+    default clock clk;
+    default reset active_low reset_n;
+
+    clocked t_axi4s32[2]  input_buf = {*=0} "Buffer including valid bits; input to the lowest available slot, output at 0";
+    comb    t_ib_combs    ib_combs;
+    comb    t_ob_combs    ob_combs;
+    clocked t_ob_state    ob_state = {*=0} "Output buffer stages - fed with the result of processing; the oldest valid is presented as the output if either are valid";
+
+    /*b AXI4S interfaces */
+    axi4s_interfaces """
+    """ : {
+        rx_axi4s_tready = (ib_combs.valid != 2b11) || ob_combs.can_push;
+
+        tx_axi4s = ob_combs.data_out;
+    }
+
+    /*b Data passing logic from input buffer to output buffer */
+    data_passing """
+    """ : {
+        ob_combs.push = ob_combs.can_push && ib_combs.combination.valid;
+        ob_combs.pop = ob_combs.data_out.valid && tx_axi4s_tready;
+        ib_combs.push = rx_axi4s_tready && rx_axi4s.valid;
+        ob_combs.push_data = ib_combs.combination;
+
+        ib_combs.consume = 0;
+        if (ob_combs.push) {
+            ib_combs.consume = ib_combs.would_consume;
+        }
+    }
+
+    /*b Input buffer */
+    input_buffer_logic """
+    """ : {
+        ib_combs.valid[0] = input_buf[0].valid;
+        ib_combs.valid[1] = input_buf[1].valid;
+
+        ib_combs.would_consume = 0;
+
+        ib_combs.combination = {*=0};
+        ib_combs.combination.t.last = input_buf[0].t.last;
+        ib_combs.combination.t.id   = input_buf[0].t.id;
+        ib_combs.combination.t.user = input_buf[0].t.user;
+        ib_combs.combination.t.dest = input_buf[0].t.dest;
+
+        ib_combs.combination.t.data[32; 0] = input_buf[0].t.data;
+        ib_combs.combination.t.strb[4; 0] = input_buf[0].t.strb;
+        ib_combs.combination.t.keep[4; 0] = input_buf[0].t.keep;
+
+        if (input_buf[0].t.last) {
+            if (ib_combs.valid[0]) {
+                ib_combs.combination.valid = 1;
+                ib_combs.would_consume[0] = 1;
+            }
+        } else {
+            if (ib_combs.valid == 2b11) {
+                ib_combs.combination.valid = 1;
+                ib_combs.would_consume = -1;
+            }
+            ib_combs.combination.t.last = input_buf[1].t.last;
+            ib_combs.combination.t.data[32; 32] = input_buf[1].t.data;
+            ib_combs.combination.t.strb[4; 4] = input_buf[1].t.strb;
+            ib_combs.combination.t.keep[4; 4] = input_buf[1].t.keep;
+            if (input_buf[1].t.user != 0) {
+                ib_combs.combination.t.user = input_buf[1].t.user;
+            }
+        }
+
+        if (ib_combs.consume == 2b11) {
+            input_buf[0].valid <= 0;
+            input_buf[1].valid <= 0;
+            if (ib_combs.push) {
+                input_buf[0] <= rx_axi4s;
+            }
+        } elsif (ib_combs.consume == 2b01) {
+            input_buf[0] <= input_buf[1];
+            input_buf[1].valid <= 0;
+            if (ib_combs.push) {
+                if (input_buf[1].valid) {
+                    input_buf[1] <= rx_axi4s;
+                } else {
+                    input_buf[0] <= rx_axi4s;
+                }
+            }
+        } elsif (ib_combs.push) {
+            if (input_buf[0].valid) {
+                input_buf[1] <= rx_axi4s;
+            } else {
+                input_buf[0] <= rx_axi4s;
+            }
+        }
+    }
+
+    /*b Output buffer */
+    output_buffer_decode """
+        Extract combinational data from the output buffer - can_push, and data_out
+    """ : {
+        ob_combs.can_push = !ob_state.data0.valid;
+        if (ob_state.to_be_pushed) {
+            ob_combs.can_push = !ob_state.data1.valid;
+        }
+
+        ob_combs.data_out = ob_state.data0;
+        if (ob_state.to_be_popped) {
+            ob_combs.data_out = ob_state.data1;
+        }
+    }
+
+    output_buffer_events """
+        Handle the pushing and popping of the output buffer
+    """ : {
+        if (ob_combs.pop) {
+            if (ob_state.to_be_popped) {
+                ob_state.data1.valid <= 0;
+            } else {
+                ob_state.data0.valid <= 0;
+            }
+            ob_state.to_be_popped <= !ob_state.to_be_popped;
+        }
+
+        if (ob_combs.push) {
+            if (ob_state.to_be_pushed) {
+                ob_state.data1 <= ob_combs.push_data;
+            } else {
+                ob_state.data0 <= ob_combs.push_data;
+            }
+            ob_state.to_be_pushed <= !ob_state.to_be_pushed;
+        }
+    }
+
+    /*b Done
+     */
+}
+
+/*a Editor preferences and notes
+mode: c ***
+c-basic-offset: 4 ***
+c-default-style: (quote ((c-mode . "k&r") (c++-mode . "k&r"))) ***
+outline-regexp: "/\\\*a\\\|[\t ]*\/\\\*[b-z][\t ]" ***
+*/

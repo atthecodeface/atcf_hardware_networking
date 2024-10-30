@@ -1,0 +1,141 @@
+/** @copyright (C) 2016-2017,  Gavin J Stark.  All rights reserved.
+ *
+ * @copyright
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0.
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ *
+ * @file   axi4s_process.cdl
+ * @brief  AXI pipeline with a process function invoked on the first N AXI4s words
+ *
+ * CDL implementation of an arbitrary AXI4S header processor
+ *
+ */
+/*a Includes
+ */
+include "axi4s.h"
+include "axi4s_modules.h"
+
+/*a Module */
+module axi4s128_to_axi4s64( clock clk         "System clock",
+                           input bit reset_n "Active low reset",
+
+                           input t_axi4s128  rx_axi4s,
+                           output bit       rx_axi4s_tready,
+                           input bit        tx_axi4s_tready,
+                           output t_axi4s64 tx_axi4s
+    )
+"""
+Width converter from 128-bit to 64-bit AXI4s
+
+Incoming data is buffered in a double buffer
+
+A simple state machine indicates whether the lower half of the AXI4S bus is next to be written to the output buffer, or the upper half.
+
+If the upper half is to be written, and there is room in the output buffer, then it is copied across; the input buffer is popped; the next half is the lower half.
+    
+If the lower half is to be written:
+
+If it is last, and the 'upper' strobes have none valid, then a last half will be written, and the input popped. The next half is the lower half (again)
+
+If it is not last or the upper strobes have some valid then it is just copied across; the next half is the upper half.
+    
+Outgoing data is buffered in a double buffer
+"""
+{
+    /*b Clock and reset */
+    default clock clk;
+    default reset active_low reset_n;
+
+    clocked bit use_upper_half = 0 "If asserted, use lower half";
+    comb bit consume_lower_half;
+    comb bit consume_upper_half;
+    comb bit consume_input;
+
+    net bit rx_axi4s_tready; 
+    net t_axi4s64 tx_axi4s;
+
+    net t_axi4s128 axi4s128;
+    comb bit axi4s128_tready;
+    comb t_axi4s64 axi4s64;
+    net bit axi4s64_tready;
+
+    net t_fifo_status ib_fifo_status;
+    net t_fifo_status ob_fifo_status;
+
+    /*b Input and output buffers */
+    input_and_output_buffers """
+    """ : {
+        axi4s128_double_buffer input_buffer( clk <- clk, reset_n <= reset_n,
+                                            req_in <= rx_axi4s,
+                                            ack_in => rx_axi4s_tready,
+                                            req_out => axi4s128,
+                                            ack_out <= axi4s128_tready,
+                                            fifo_status => ib_fifo_status );
+        axi4s64_double_buffer output_buffer( clk <- clk, reset_n <= reset_n,
+                                             req_in <= axi4s64,
+                                             ack_in => axi4s64_tready,
+                                             req_out => tx_axi4s,
+                                             ack_out <= tx_axi4s_tready,
+                                             fifo_status => ob_fifo_status );
+    }
+
+
+    conversion_logic """
+    Conversion logic
+    """: {
+        consume_lower_half = 0;
+        consume_upper_half = 0;
+        consume_input = 0;
+
+        if (axi4s64_tready && axi4s128.valid) {
+            if (use_upper_half) {
+                consume_upper_half = 1;
+                consume_input = 1;
+            } else {
+                consume_lower_half = 1;
+                if (axi4s128.t.last && (axi4s128.t.keep[8;8]==0)) {
+                    consume_input = 1;
+                }
+            }
+        }
+
+        axi4s64.valid = consume_upper_half || consume_lower_half;
+        axi4s64.t.last = axi4s128.t.last && consume_input;
+        axi4s64.t.strb = axi4s128.t.strb[8;0];
+        axi4s64.t.keep = axi4s128.t.keep[8;0];
+        axi4s64.t.data = axi4s128.t.data0;
+        axi4s64.t.id = axi4s128.t.id;
+        axi4s64.t.dest = axi4s128.t.dest;
+        axi4s64.t.user = axi4s128.t.user;
+        if (use_upper_half) {
+            axi4s64.t.strb = axi4s128.t.strb[8;8];
+            axi4s64.t.keep = axi4s128.t.keep[8;8];
+            axi4s64.t.data = axi4s128.t.data1;
+        }
+        axi4s128_tready = consume_input;
+
+        if (consume_lower_half) {
+            use_upper_half <= 1;
+        }
+        if (consume_input) {
+            use_upper_half <= 0;
+        }
+    }
+                                                                                          
+    /*b Done
+     */
+}
+
+/*a Editor preferences and notes
+mode: c ***
+c-basic-offset: 4 ***
+c-default-style: (quote ((c-mode . "k&r") (c++-mode . "k&r"))) ***
+outline-regexp: "/\\\*a\\\|[\t ]*\/\\\*[b-z][\t ]" ***
+*/

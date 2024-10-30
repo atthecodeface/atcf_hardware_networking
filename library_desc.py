@@ -13,13 +13,38 @@ class Axi4sModules(cdl_desc.Modules):
     cdl_include_dirs = ["cdl"]
     export_dirs = cdl_include_dirs + [ src_dir ]
     modules = []
-    modules += [ CdlModule("axi4s32_fifo_4",
+    for axi in ["axi4s32", "axi4s64", "axi4s128"]:
+        t_axi = "t_"+axi;
+        modules += [ CdlModule(axi+"_fifo_4",
                            force_includes=["axi4s.h"],
-                           types={"gt_generic_valid_req":"t_axi4s32"},
+                           types={"gt_generic_valid_req":t_axi},
                            cdl_module_name="generic_valid_ack_fifo",
                            instance_types={"fifo_status":"fifo_status_7"},
-    ) ]
+                               ) ]
+        modules += [ CdlModule(axi+"_double_buffer",
+                           force_includes=["axi4s.h"],
+                           types={"gt_generic_valid_req":t_axi},
+                           cdl_module_name="generic_valid_ack_double_buffer",
+                           instance_types={"fifo_status":"fifo_status_3"},
+                               ) ]
+        modules += [ CdlModule(axi+"_insertion_buffer_8",
+                           force_includes=["axi4s.h"],
+                           types={"gt_generic_valid_req":t_axi},
+                           constants={"fifo_depth":8},
+                           instance_types={"fifo_status":"fifo_status_7"},
+                           cdl_module_name="generic_valid_ack_insertion_buffer",
+                               ) ]
+
+        pass
     modules += [ CdlModule("apb_target_axi4s") ]
+    modules += [ CdlModule("axi4s64_to_axi4s32") ]
+    modules += [ CdlModule("axi4s32_to_axi4s64") ]
+    modules += [ CdlModule("axi4s64_to_axi4s128") ]
+    modules += [ CdlModule("axi4s128_to_axi4s64") ]
+    modules += [ CdlModule("axi4s64_apb_master") ]
+    modules += [ CdlModule("axi4s64_initiator_sram") ]
+    modules += [ CdlModule("axi4s_process") ]
+    modules += [ CdlModule("axi4s_process8_map_udp") ]
     modules += [ CdlModule("tb_apb_target_axi4s", src_dir="tb_cdl") ]
     pass
 
