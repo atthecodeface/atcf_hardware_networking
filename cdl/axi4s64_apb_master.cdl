@@ -1,0 +1,980 @@
+/** @copyright (C) 2016-2017,  Gavin J Stark.  All rights reserved.
+ *
+ * @copyright
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0.
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ *
+ * @file   axi4s_process.cdl
+ * @brief  AXI pipeline with a process function invoked on the first N AXI4s words
+ *
+ * CDL implementation of an arbitrary AXI4S header processor
+ *
+ */
+/*a Includes
+ */
+include "std::srams.h"
+include "utils::sram_access.h"
+include "utils::fifo_modules.h"
+include "apb::apb_masters.h"
+include "axi4s.h"
+include "axi4s_modules.h"
+
+/*a Constants
+ */
+constant bit[32] IP_ADDR = 0xac10f078;
+constant bit[48] ETH_ADDR = 0x123456789abc;
+constant bit[16] UDP_PORT = 0x1234;
+
+/*a Types
+ */
+/*t t_ib_fsm
+ */
+typedef fsm {
+    ib_fsm_wait_for_data;
+    ib_fsm_drop;
+    ib_fsm_pop_hdr_1;
+    ib_fsm_pop_hdr_2;
+    ib_fsm_pop_hdr_3;
+    ib_fsm_pop_hdr_4;
+    ib_fsm_copy_first_payload;
+    ib_fsm_copy_payload;
+    ib_fsm_apb_wait;
+    ib_fsm_wait_for_ais;
+} t_ib_fsm;
+
+/*t t_ib_action
+ */
+typedef enum[4] {
+    ib_action_none,
+    ib_action_drop_first_data,
+    ib_action_drop_data,
+    ib_action_pkt_start, // drop_hdr_0_start_apb,
+    ib_action_drop_hdr_1,
+    ib_action_drop_hdr_2,
+    ib_action_drop_hdr_3,
+    ib_action_drop_hdr_4,
+    ib_action_copy_first_payload, // Copies 2 bytes
+    ib_action_copy_payload, // does not copy beyond payload length
+    ib_action_copy_last_payload, // does not copy beyond payload length
+    ib_action_finished, // Has already copied last, wait for AIS to finish using pkt state
+    ib_action_ais_finished, // Pkt state has been finished with
+} t_ib_action;
+
+/*t t_ib_combs
+ */
+typedef struct {
+    bit[8] data_valid "Collection of the ib_data valid bits";
+    bit[8] data_valid_last "Collection of the ib_data valid bits ANDed with their last bits; nonzero if last data for pkt is in the input buffer";
+    bit data_ack "Asserted to ack ib_data0 from the input buffer";
+    t_ib_action action;
+    bit payload_copied "Asserted if no more bytes will be pushed to the byte FIFO";
+    bit[16] script_len;
+    bit pkt_valid;
+} t_ib_combs;
+
+/*t t_ib_state
+ */
+typedef struct {
+    t_ib_fsm fsm_state;
+    bit[8] script_len "Remaining script length in bytes";
+    bit dropped_last;
+} t_ib_state;
+
+/*t t_apb_fsm
+ */
+typedef fsm {
+    apb_fsm_idle;
+    apb_fsm_present_payload;
+    apb_fsm_completed;
+} t_apb_fsm;
+
+/*t t_apb_action
+ */
+typedef enum[3] {
+    apb_action_none,
+    apb_action_start,
+    apb_action_present_payload,
+    apb_action_present_last_payload,
+    apb_action_flush_payload,
+    apb_action_complete,
+    apb_action_finish
+} t_apb_action;
+
+/*t t_apb_combs
+ */
+typedef struct {
+    t_apb_action action;
+    bit completed;
+} t_apb_combs;
+
+/*t t_apb_state
+ */
+typedef struct {
+    t_apb_fsm fsm_state;
+} t_apb_state;
+
+/*t t_ais_fsm
+ */
+typedef fsm {
+    ais_fsm_idle;
+    ais_fsm_gather_payload;
+    ais_fsm_gather_completed_payload;
+    ais_fsm_write_pkt_hdr;
+    ais_fsm_write_pkt_complete;
+} t_ais_fsm;
+
+/*t t_ais_action
+ */
+typedef enum[3] {
+    ais_action_idle,
+    ais_action_start,
+    ais_action_gather_payload,
+    ais_action_gather_completed_payload,
+    ais_action_complete,
+    ais_action_write_pkt_hdr,
+    ais_action_write_pkt_complete,
+} t_ais_action;
+
+/*t t_ais_combs
+ */
+typedef struct {
+    t_ais_action action;
+    bit[4] resp_bytes_valid;
+    bit[4] bytes_popped;
+    bit can_take_request;
+} t_ais_combs;
+
+/*t t_ais_state
+ */
+typedef struct {
+    t_ais_fsm fsm_state;
+    bit[12] payload_len;
+    bit[3] count;
+    bit completed;
+} t_ais_state;
+
+/*t t_pkt_action */
+typedef enum [3] {
+    pkt_action_none,
+    pkt_action_start,
+    pkt_action_finalize
+} t_pkt_action;
+
+/*t t_pkt_combs
+ */
+typedef struct {
+    t_pkt_action action;
+    bit[17] adjusted_csum;
+    bit[16] final_csum;
+    bit[64] data0;
+    bit[64] data1;
+    bit[64] data2;
+    bit[64] data3;
+    bit[64] data4;
+    bit[64] data5;
+} t_pkt_combs;
+
+/*t t_pkt_state
+ */
+typedef struct {
+    t_eth_hdr  eth_hdr;
+    t_ipv4_hdr ipv4_hdr;
+    t_udp_hdr  udp_hdr;
+    bit apb_poll_failed;
+    bit apb_errored;
+    bit[8] apb_req_id;
+    bit[18] ipv4_csum_adjust;
+} t_pkt_state;
+
+/*a Module */
+module axi4s64_apb_master( clock clk         "System clock",
+                          input bit reset_n "Active low reset",
+
+                          input t_axi4s64  rx_axi4s,
+                          output bit       rx_axi4s_tready,
+                          input bit        tx_axi4s_tready,
+                          output t_axi4s64 tx_axi4s,
+                          output t_apb_request apb_request,
+                          input t_apb_response apb_response
+    )
+"""
+Take Eth-IPv4-Udp packets and parse them as APB requests
+
+When valid return an Eth-IPv4-UDP packet with APB responses
+
+The packet has an Ethernet header (14 bytes), IPv4 header (20 bytes), UDP header (8 bytes), and the APB script (id 2 bytes, 4 more bytes of stuff, then script)
+
+Hence the script starts at byte 14+20+8+2+4 = 48 bytes.
+The UDP payload is 14 bytes plus the script length; it is parsed by net_parse_udp.
+
+The script length is hence udp payload length MINUS 14, starting at data6.
+
+Internally the APB state has an APB select and address registers, plus
+poll count and poll delay
+
+There are basically four opcodes: Set, Poll, Read, Write. All
+instructions are an opcode byte and an 'address' byte
+
+Write commands have additional data bytes    
+
+* Set can set the Select, Address, Poll delay, or Poll count
+  registers. There is no resultant data.
+
+* Poll does an APB read and tests a specified bit for either Set or
+  Clear.
+
+  A resultant data is the poll count if successful, or zero if
+  not. On failure the transactions abort.
+
+* Read does an APB read of 8/16/32 of an address, with optional
+  increment. Resultant data is pushed.
+
+* Write does an APB read of 8/16/32 of an address, with optional
+  increment. Following data bytes are used for write data.
+
+    
+The codes are:
+00_00_00_01 -> Set address [8;8]
+00_00_00_10 -> Set address [8;16]
+00_00_00_11 -> Set address [8;24]
+00_00_10_xx -> Set poll delay
+00_00_11_xx -> Set poll count (8 bits nonzero)
+01_0_BBBBB  -> Poll bit B clear A8
+01_1_BBBBB  -> Poll bit B set A8
+10_0_NNN_SS -> Read N (Size) A8
+10_1_NNN_SS -> Read Inc N (Size) A8
+11_0_NNN_SS -> Write N (Size) A8 DN
+11_1_NNN_SS -> Write Inc N (Size) A8 DN
+
+SS is 00 for byte, 01 for 16-bit, else 32-bit
+
+Example of using an APB target SRAM:
+
+    02 02 : Set address to be 0x00020000
+    c1 00 30 12 : Write address 0x2000 data 0x1230 (Sram address 0x1230)
+    ca 04 ef be ad de 0d f0 fe ca : Write address 0x2004 data 0xdeadbeef then 0xcafefood
+
+Example of using an APB target minimal UART:
+
+    02 04 : Set address to be 0x00040000
+    70 00 : Poll once address 0x4000 bit 16 to be set (rx is valid)
+    80 03 : Read holding register byte 0x4003 (Uart rx data)
+
+"""
+{
+    /*b Clock and reset */
+    default clock clk;
+    default reset active_low reset_n;
+
+    net bit rx_axi4s_tready; 
+    net t_apb_request      apb_request;
+
+    net t_fifo_status ib_fifo_status;
+
+    net t_axi4s64 ib_data0;
+    net t_axi4s64 ib_data1;
+    net t_axi4s64 ib_data2;
+    net t_axi4s64 ib_data3;
+    net t_axi4s64 ib_data4;
+    net t_axi4s64 ib_data5;
+    net t_axi4s64 ib_data6;
+    net t_axi4s64 ib_data7;
+
+    comb bit[64] bf_push_data;
+    comb bit[4] bf_push_num_bytes;
+    comb bit[4] bf_pop_num_bytes;
+    net bit[64] bf_data;
+    net bit[4] bf_data_num_bytes_valid;
+    net t_fifo_status bf_fifo_status;
+
+    net t_eth_hdr axi_eth_hdr;
+    net t_ipv4_hdr axi_ipv4_hdr;
+    net t_udp_hdr axi_udp_hdr;
+
+    comb t_ib_combs ib_combs;
+    clocked t_ib_state ib_state = {*=0, fsm_state=ib_fsm_wait_for_data};
+
+    net t_axi4s64 tx_axi4s;
+
+    comb t_apb_combs apb_combs;
+    clocked t_apb_state apb_state = {*=0};
+
+    comb t_pkt_combs pkt_combs;
+    clocked t_pkt_state pkt_state = {*=0};
+
+    net bit[64] pck_eth_data0;
+    net bit[48] pck_eth_data1;
+    net bit[64] pck_ip_data0;
+    net bit[64] pck_ip_data1;
+    net bit[32] pck_ip_data2;
+    net bit[64] pck_udp_data;
+
+    net bit[64] db_data;
+    net bit[4] db_data_num_bytes_valid;
+    net t_fifo_status db_fifo_status;
+
+    comb t_ais_combs ais_combs;
+    clocked t_ais_state ais_state = {*=0};
+
+    comb t_apb_script_master_request  apb_script_req;
+    net t_apb_script_master_response  apb_script_resp;
+
+    clocked t_ais_request ais_request = {*=0};
+    net bit ais_ready;
+    
+    /*b Input buffer and parsing */
+    input_buffer_and_parsing """
+    """ : {
+        axi4s64_insertion_buffer_8 input_buffer( clk <- clk, reset_n <= reset_n,
+                                                  req_in <= rx_axi4s,
+                                                  ack_in => rx_axi4s_tready,
+
+                                                  // req_out
+                                                  ack_out <= ib_combs.data_ack,
+                                                  data0 => ib_data0,
+                                                  data1 => ib_data1,
+                                                  data2 => ib_data2,
+                                                  data3 => ib_data3,
+                                                  data4 => ib_data4,
+                                                  data5 => ib_data5,
+                                                  data6 => ib_data6,
+                                                  data7 => ib_data7,
+
+                                                  fifo_status => ib_fifo_status );
+        net_parse_eth parse_eth(data0 <= ib_data0.t.data,
+                            data1 <= ib_data1.t.data,
+                            eth_hdr => axi_eth_hdr
+            );
+        net_parse_ipv4 parse_ipv4(data0 <= bundle(ib_data2.t.data[48;0], ib_data1.t.data[16;48]),
+                              data1 <= bundle(ib_data3.t.data[48;0], ib_data2.t.data[16;48]),
+                              data2 <= bundle(ib_data4.t.data[48;0], ib_data3.t.data[16;48]),
+                              ipv4_hdr => axi_ipv4_hdr
+            );
+        net_parse_udp parse_udp( data0 <= bundle(ib_data5.t.data[16;0], ib_data4.t.data[48;16]),
+                             udp_hdr => axi_udp_hdr
+            );
+
+        net_pack_eth pack_eth(data0 => pck_eth_data0,
+                              data1 => pck_eth_data1,
+                              eth_hdr <= pkt_state.eth_hdr
+            );
+        net_pack_ipv4 pack_ipv4(data0 => pck_ip_data0,
+                                data1 => pck_ip_data1,
+                                data2 => pck_ip_data2,
+                              ipv4_hdr <= pkt_state.ipv4_hdr
+            );
+        net_pack_udp pack_udp( data0 => pck_udp_data,
+                               udp_hdr <= pkt_state.udp_hdr
+            );
+
+        byte_fifo_multiaccess_24_8 byte_fifo( clk <- clk,
+                                              reset_n <= reset_n,
+                                              data_in <= bf_push_data,
+                                              data_in_bytes_valid <= bf_push_num_bytes,
+                                              data_bytes_popped <= bf_pop_num_bytes,
+                                              data_out => bf_data,
+                                              data_out_bytes_valid => bf_data_num_bytes_valid,
+                                              fifo_status => bf_fifo_status
+            );
+    }
+
+    /*b Input buffer FSM
+     */
+    ib_fsm """
+        The input buffer waits for the input buffer to fill with the start of a packet (or the whole packet, if it is short).
+
+        When the input buffer is ready the parsing result can be used to determine if the packet has the correct headers. If it does not, then the state machine will discard all of the data in the packet up to and including the Axi4S flit that is 'last'
+
+        If the input buffer contains a valid packet then it will start the APB state machine, which will use the input buffer content to present a script to the APB master. When the script completes the input buffer FSM will discard the input buffer contents, up to the last flit.
+
+        """ : {
+        ib_combs.data_valid = bundle(ib_data7.valid,
+                            ib_data6.valid,
+                            ib_data5.valid,
+                            ib_data4.valid,
+                            ib_data3.valid,
+                            ib_data2.valid,
+                            ib_data1.valid,
+                            ib_data0.valid
+            );
+        ib_combs.data_valid_last = ib_combs.data_valid & bundle(ib_data7.t.last,
+                            ib_data6.t.last,
+                            ib_data5.t.last,
+                            ib_data4.t.last,
+                            ib_data3.t.last,
+                            ib_data2.t.last,
+                            ib_data1.t.last,
+                            ib_data0.t.last
+            );
+        ib_combs.script_len = axi_udp_hdr.len - 12;
+        ib_combs.pkt_valid = 1;
+        if (ib_combs.script_len > axi_udp_hdr.len) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (ib_combs.script_len < 2) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (axi_eth_hdr.dmac != ETH_ADDR) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (axi_eth_hdr.proto != 0x0800) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (!axi_ipv4_hdr.valid_vh) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (!axi_ipv4_hdr.valid_frag) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (!axi_ipv4_hdr.valid_ttl) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (axi_ipv4_hdr.proto != 0x11) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (axi_ipv4_hdr.dst != IP_ADDR) {
+            ib_combs.pkt_valid = 0;
+        }
+        if (axi_udp_hdr.dst != UDP_PORT) {
+            ib_combs.pkt_valid = 0;
+        }
+        ib_combs.action = ib_action_none;
+        ib_combs.payload_copied = 0;
+
+        full_switch (ib_state.fsm_state) {
+            case ib_fsm_drop : {
+                ib_combs.action = ib_action_drop_data;
+            }
+            case ib_fsm_wait_for_data: {
+                ib_combs.action = ib_action_none;
+                // If packet data is all present or fills buffer
+                //
+                // Check the packet is good content
+                //
+                // Set the ib payload offset
+                //
+                // Start an APB or drop the packet
+                if (ib_combs.data_valid_last!=0){
+                    ib_combs.action = ib_action_drop_first_data;
+                    if (ib_combs.pkt_valid) {
+                        ib_combs.action = ib_action_pkt_start;
+                    }
+                } elsif (ib_combs.data_valid==0xff) {
+                    ib_combs.action = ib_action_drop_first_data;
+                    if (ib_combs.pkt_valid) {
+                        ib_combs.action = ib_action_pkt_start;
+                    }
+                }
+            }
+            case ib_fsm_pop_hdr_1: {
+                ib_combs.action = ib_action_drop_hdr_1;
+            }
+            case ib_fsm_pop_hdr_2: {
+                ib_combs.action = ib_action_drop_hdr_2;
+            }
+            case ib_fsm_pop_hdr_3: {
+                ib_combs.action = ib_action_drop_hdr_3;
+            }
+            case ib_fsm_pop_hdr_4: {
+                ib_combs.action = ib_action_drop_hdr_4;
+            }
+            case ib_fsm_copy_first_payload: {
+                ib_combs.action = ib_action_copy_first_payload;
+            }
+            case ib_fsm_copy_payload: {
+                if ((bf_fifo_status.spaces_available >= 8) && ib_combs.data_valid[0]) {
+                    ib_combs.action = ib_action_copy_payload;
+                    if (ib_combs.data_valid_last[0]) {
+                        ib_combs.action = ib_action_copy_last_payload;
+                    }
+                }
+            }
+            case ib_fsm_apb_wait : {
+                ib_combs.payload_copied = 1;
+                if (apb_combs.completed) {
+                    if (ib_state.dropped_last) {
+                        ib_combs.action = ib_action_finished;
+                    } else {
+                        ib_combs.action = ib_action_drop_data;
+                    }
+                }
+            }
+            case ib_fsm_wait_for_ais: {
+                if (ais_state.completed) {
+                    ib_combs.action = ib_action_ais_finished;
+                }
+            }
+        }
+
+        bf_push_data = ib_data0.t.data;
+        if (ib_combs.action == ib_action_copy_first_payload) {
+            bf_push_data[16;0] = ib_data0.t.data[16;48];
+         }
+
+        bf_push_num_bytes = 0;
+        ib_combs.data_ack = 0;
+        full_switch (ib_combs.action) {
+            case ib_action_none: {
+                ib_combs.data_ack = 0;
+            }
+            case ib_action_drop_first_data: {
+                ib_combs.data_ack = 1;
+                ib_state.fsm_state <= ib_fsm_drop;
+                ib_state.dropped_last <= 0;
+                if (ib_data0.valid && ib_data0.t.last) {
+                    ib_state.fsm_state <= ib_fsm_wait_for_data;
+                    ib_state.dropped_last <= 1;
+                }
+            }
+            case ib_action_drop_data: {
+                ib_combs.data_ack = 1;
+                ib_state.fsm_state <= ib_fsm_drop;
+                if (ib_data0.valid && ib_data0.t.last) {
+                    ib_state.fsm_state <= ib_fsm_wait_for_data;
+                    ib_state.dropped_last <= 1;
+                }
+            }
+            case ib_action_pkt_start: {
+                // drop first 8 bytes of pkt
+                ib_combs.data_ack = 1;
+                ib_state.fsm_state <= ib_fsm_pop_hdr_1;
+                ib_state.script_len <= ib_combs.script_len[8;0];
+                ib_state.dropped_last <= 0;
+            }
+            case ib_action_drop_hdr_1: {
+                // drop bytes 9-16 of pkt
+                ib_combs.data_ack = 1;
+                ib_state.fsm_state <= ib_fsm_pop_hdr_2;
+            }
+            case ib_action_drop_hdr_2: {
+                // drop bytes 17-23 of pkt
+                ib_combs.data_ack = 1;
+                ib_state.fsm_state <= ib_fsm_pop_hdr_3;
+            }
+            case ib_action_drop_hdr_3: {
+                // drop bytes 24-31 of pkt
+                ib_combs.data_ack = 1;
+                ib_state.fsm_state <= ib_fsm_pop_hdr_4;
+            }
+            case ib_action_drop_hdr_4: {
+                // drop bytes 32-39 of pkt
+                ib_combs.data_ack = 1;
+                ib_state.fsm_state <= ib_fsm_copy_first_payload;
+            }
+            case ib_action_copy_first_payload: {
+                // drop bytes 40-45 of pkt
+                ib_combs.data_ack = 1;
+                bf_push_num_bytes = 2;
+                ib_state.fsm_state <= ib_fsm_copy_payload;
+                ib_state.script_len <= ib_state.script_len - 2;
+            }
+            case ib_action_copy_payload: {
+                ib_combs.data_ack = 1;
+                bf_push_num_bytes = 8;
+                ib_state.script_len <= ib_state.script_len - 8;
+                if (ib_state.script_len < 8) {
+                    bf_push_num_bytes = ib_state.script_len[4;0];
+                    ib_state.script_len <= 0;
+                }
+                ib_state.fsm_state <= ib_fsm_copy_payload;
+            }
+            case ib_action_copy_last_payload: {
+                // Ignore bytes that are marked as !KEEP
+                ib_combs.data_ack = 1;
+                bf_push_num_bytes = 8;
+                ib_state.script_len <= ib_state.script_len - 8;
+                ib_state.dropped_last <= 1;
+                if (ib_state.script_len < 8) {
+                    bf_push_num_bytes = ib_state.script_len[4;0];
+                    ib_state.script_len <= 0;
+                }
+                ib_state.fsm_state <= ib_fsm_apb_wait;
+            }
+            case ib_action_finished: {
+                ib_state.fsm_state <= ib_fsm_wait_for_ais;
+            }
+            case ib_action_ais_finished: {
+                ib_state.fsm_state <= ib_fsm_wait_for_data;
+            }
+        }
+    }                                                                                          
+
+    /*b APB script FSM
+     */
+    apb_script_fsm : {
+        /* Instantiate the Script master
+         */
+        apb_script_master asm(clk <- clk,
+                              reset_n <= reset_n,
+                              apb_script_req <= apb_script_req,
+                              apb_script_resp => apb_script_resp,
+                              apb_request => apb_request,
+                              apb_response <= apb_response
+            );
+
+        /* Determine apb_action
+         */
+        apb_combs.action = apb_action_none;
+        apb_combs.completed = 0;
+        full_switch (apb_state.fsm_state) {
+        case apb_fsm_idle: {
+            if (ib_combs.action == ib_action_pkt_start) {
+                apb_combs.action = apb_action_start;
+            }
+        }
+        case apb_fsm_present_payload: {
+            apb_combs.action = apb_action_present_payload;
+            if (ib_combs.payload_copied && bf_data_num_bytes_valid==0) {
+                apb_combs.action = apb_action_present_last_payload;
+            }
+        }
+        case apb_fsm_completed: {
+            apb_combs.action = apb_action_flush_payload;
+            if (ib_combs.payload_copied && bf_data_num_bytes_valid==0) {
+                apb_combs.action = apb_action_finish;
+                apb_combs.completed = 1;
+            }
+        }
+        }
+        if (apb_state.fsm_state != apb_fsm_idle) {
+            if (apb_script_resp.resp_type == asm_resp_completed) {
+                apb_combs.action = apb_action_complete;
+            }
+            if (apb_script_resp.resp_type == asm_resp_poll_failed) {
+                apb_combs.action = apb_action_complete;
+            }
+            if (apb_script_resp.resp_type == asm_resp_errored) {
+                apb_combs.action = apb_action_complete;
+            }
+        }
+
+        /* Enact apb_action
+         */
+        apb_script_req.op = asm_op_idle;
+        apb_script_req.data = bf_data[48;0];
+        apb_script_req.num_data_valid = bf_data_num_bytes_valid[3;0];
+        if (bf_data_num_bytes_valid[3]) {
+            apb_script_req.num_data_valid = 7;
+        }
+        bf_pop_num_bytes = bundle(1b0, apb_script_resp.bytes_consumed);
+
+        full_switch (apb_combs.action) {
+        case apb_action_none: {
+            apb_state.fsm_state <= apb_state.fsm_state;
+        }
+        case apb_action_start: {
+            apb_state.fsm_state <= apb_fsm_present_payload;
+            apb_script_req.op = asm_op_start;
+        }
+        case apb_action_present_payload: {
+            apb_script_req.op = asm_op_data;
+        }
+        case apb_action_present_last_payload: {
+            apb_script_req.op = asm_op_data_last;
+        }
+        case apb_action_flush_payload: {
+            bf_pop_num_bytes = bf_data_num_bytes_valid;
+            apb_state.fsm_state <= apb_state.fsm_state;
+        }
+        case apb_action_complete: {
+            apb_state.fsm_state <= apb_fsm_completed;
+        }
+        case apb_action_finish: {
+            apb_state.fsm_state <= apb_fsm_idle;
+        }
+        }
+    }                                                                                          
+
+    /*b Packet state handling
+     */
+    pkt_state_handling : {
+        /* IPv4 packet checksum calculation
+         */
+        if (pkt_state.ipv4_csum_adjust[2;16] != 0) {
+            pkt_state.ipv4_csum_adjust <= bundle(2b0, pkt_state.ipv4_csum_adjust[16;0]) + bundle(16b0, pkt_state.ipv4_csum_adjust[2;16]);
+        }
+        pkt_combs.adjusted_csum = ( bundle( 1b0, pkt_state.ipv4_csum_adjust[16;0]) + 0xffff -
+                                    bundle(5b0, ais_state.payload_len + 28)
+            );
+
+        pkt_combs.final_csum = pkt_combs.adjusted_csum[16;0];
+        if (pkt_combs.adjusted_csum == 0) {
+            pkt_combs.final_csum = 0xffff;
+        } elsif (pkt_combs.adjusted_csum == 0x1ffff) {
+            pkt_combs.final_csum = 0x1;
+        } elsif (pkt_combs.adjusted_csum[16]) {
+            pkt_combs.final_csum = pkt_combs.adjusted_csum[16;0] + 1;
+        }
+
+        full_switch (pkt_combs.action) {
+            case pkt_action_start: {
+                pkt_state.eth_hdr <= axi_eth_hdr;
+                pkt_state.eth_hdr.smac <= axi_eth_hdr.dmac;
+                pkt_state.eth_hdr.dmac <= axi_eth_hdr.smac;
+
+                pkt_state.ipv4_hdr <= axi_ipv4_hdr;
+                pkt_state.ipv4_hdr.src <= axi_ipv4_hdr.dst;
+                pkt_state.ipv4_hdr.dst <= axi_ipv4_hdr.src;
+                // Remove the TTL and pkt length is 0 by adding and ADD the TTL of 0x40 by adding 0xc000
+                pkt_state.ipv4_csum_adjust <= bundle(2b0, axi_ipv4_hdr.ttl, 8b0) + bundle(2b0, axi_ipv4_hdr.len) + 0xc000 + bundle(2b0, axi_ipv4_hdr.csum);
+                pkt_state.ipv4_hdr.ttl <= 0x40;
+
+                pkt_state.udp_hdr.src <= axi_udp_hdr.dst;
+                pkt_state.udp_hdr.dst <= axi_udp_hdr.src;
+                pkt_state.udp_hdr.len <= 8;
+                pkt_state.udp_hdr.csum <= 0;
+
+                pkt_state.apb_req_id <= ib_data5.t.data[8;16];
+                pkt_state.apb_errored <= 0;
+                pkt_state.apb_poll_failed <= 0;
+            }
+            case pkt_action_finalize: {
+                pkt_state.ipv4_hdr.csum <= pkt_combs.final_csum;
+                pkt_state.ipv4_hdr.len <= bundle(4b0, ais_state.payload_len) + 28;
+                pkt_state.udp_hdr.len <= bundle(4b0, ais_state.payload_len) + 8;
+            }
+            case pkt_action_none: {
+                pkt_state <= pkt_state;
+            }
+        }
+        if (apb_script_resp.resp_type == asm_resp_errored) {
+            pkt_state.apb_errored <= 1;
+        }
+        if (apb_script_resp.resp_type == asm_resp_poll_failed) {
+            pkt_state.apb_errored <= 1;
+            pkt_state.apb_poll_failed <= 1;
+        }
+        pkt_combs.data0 = pck_eth_data0;
+        pkt_combs.data1 = bundle(pck_ip_data0[16;0], pck_eth_data1);
+        pkt_combs.data2 = bundle(pck_ip_data1[16; 0], pck_ip_data0[48; 16]);
+        pkt_combs.data3 = bundle(pck_ip_data2[16; 0], pck_ip_data1[48; 16]);
+        pkt_combs.data4 = bundle(pck_udp_data[48; 0], pck_ip_data2[16; 16]);
+        pkt_combs.data5 = bundle(16b0, // data already written
+                                 4b0,
+                                 ais_state.payload_len, 6b0,
+                                 pkt_state.apb_poll_failed,
+                                 pkt_state.apb_errored,
+                                 pkt_state.apb_req_id, pck_udp_data[16; 48]);
+    }                                                                                          
+
+    /*b Data buffer
+     */
+    data_buffer_logic : {
+        byte_fifo_multiaccess_24_8 data_buffer( clk <- clk,
+                                                reset_n <= reset_n,
+                                                data_in <= bundle(32b0, apb_script_resp.data),
+                                                data_in_bytes_valid <= ais_combs.resp_bytes_valid,
+                                                data_bytes_popped <= ais_combs.bytes_popped,
+                                                data_out => db_data,
+                                                data_out_bytes_valid => db_data_num_bytes_valid,
+                                                fifo_status => db_fifo_status
+            );
+
+        /* Determine db action
+         */
+        if (ais_state.completed) {
+            ais_state.completed <= 0;
+        }
+        ais_combs.resp_bytes_valid = 0;
+        ais_combs.action = ais_action_idle;
+        pkt_combs.action = pkt_action_none;
+        full_switch (ais_state.fsm_state) {
+        case ais_fsm_idle : {
+            ais_combs.action = ais_action_idle;
+            if (ib_combs.action == ib_action_pkt_start) {
+                ais_combs.action = ais_action_start;
+                ais_combs.resp_bytes_valid = 6; // To word-align the db output to SRAM
+                pkt_combs.action = pkt_action_start;
+            }
+        }
+        case ais_fsm_gather_payload : {
+            full_switch (apb_script_resp.bytes_valid) {
+            case 0: { ais_combs.resp_bytes_valid = 0; }
+            case 1: { ais_combs.resp_bytes_valid = 1; }
+            case 2: { ais_combs.resp_bytes_valid = 2; }
+            case 3: { ais_combs.resp_bytes_valid = 4; }
+            }
+            if (db_data_num_bytes_valid >= 8) {
+                ais_combs.action = ais_action_gather_payload;
+            }
+            if (apb_combs.completed) {
+                ais_combs.resp_bytes_valid = 0;
+                ais_combs.action = ais_action_gather_completed_payload;
+            }
+        }
+        case ais_fsm_gather_completed_payload : {
+            ais_combs.action = ais_action_gather_completed_payload;
+            ais_combs.resp_bytes_valid = 0;
+            if (db_data_num_bytes_valid == 0) {
+                ais_combs.action = ais_action_complete;
+                pkt_combs.action = pkt_action_finalize;
+            }
+        }
+        case ais_fsm_write_pkt_hdr : {
+            ais_combs.action = ais_action_write_pkt_hdr;
+        }
+        case ais_fsm_write_pkt_complete : {
+            ais_combs.action = ais_action_write_pkt_complete;
+        }
+        }
+
+        ais_combs.can_take_request = !ais_request.valid || ais_ready;
+        ais_combs.bytes_popped = 0;
+        if (ais_ready) {
+            ais_request.valid <= 0;
+        }
+        full_switch (ais_combs.action) {
+        case ais_action_idle : {
+            ais_state.fsm_state <= ais_state.fsm_state;
+        }
+        case ais_action_start : {
+            ais_state.fsm_state <= ais_fsm_gather_payload;
+            ais_state.payload_len <= -2; // Includes 6 extra bytes in UDP csum, 4 bytes hdr
+            ais_request.t.offset <= 5; // writes from bit 0, only top 2 bytes valid
+        }
+        case ais_action_gather_payload : {
+            if (ais_combs.can_take_request) {
+                ais_combs.bytes_popped = 8;
+                ais_request.valid  <= 1;
+                ais_request.t.op     <= ais_req_write_pkt;
+                ais_request.t.offset <= ais_request.t.offset + 1;
+                ais_request.t.data   <= db_data;
+                ais_request.t.byte_enables <= 0xff;
+                ais_state.payload_len <= ais_state.payload_len + 8;
+            }
+        }
+        case ais_action_gather_completed_payload : {
+            ais_state.fsm_state <= ais_fsm_gather_completed_payload;
+            // Nothing more will be pushed
+            if (ais_combs.can_take_request) {
+                ais_combs.bytes_popped = db_data_num_bytes_valid;
+                if (db_data_num_bytes_valid >= 8) {
+                    ais_combs.bytes_popped = 8;
+                }
+                ais_request.valid <= 1;
+                ais_request.t.op           <= ais_req_write_pkt;
+                ais_request.t.offset       <= ais_request.t.offset + 1;
+                ais_request.t.data         <= db_data;
+                ais_request.t.byte_enables <= 0xff;
+                ais_state.payload_len <= ais_state.payload_len + bundle(8b0, ais_combs.bytes_popped);
+            }
+        }
+        case ais_action_complete : {
+            ais_state.fsm_state <= ais_fsm_write_pkt_hdr;
+            ais_state.count <= 0;
+        }
+        case ais_action_write_pkt_hdr : {
+            if (ais_combs.can_take_request) {
+                ais_state.count <= ais_state.count + 1;
+                ais_request.valid <= 1;
+                ais_request.t.op           <= ais_req_write_pkt;
+                ais_request.t.byte_enables <= 0xff;
+                full_switch (ais_state.count) {
+                case 0: {
+                    ais_request.t.offset       <= 1;
+                    ais_request.t.data         <= pkt_combs.data0;
+                }
+                case 1: {
+                    ais_request.t.offset       <= 2;
+                    ais_request.t.data         <= pkt_combs.data1;
+                }
+                case 2: {
+                    ais_request.t.offset       <= 3;
+                    ais_request.t.data         <= pkt_combs.data2;
+                }
+                case 3: {
+                    ais_request.t.offset       <= 4;
+                    ais_request.t.data         <= pkt_combs.data3;
+                }
+                case 4: {
+                    ais_request.t.offset       <= 5;
+                    ais_request.t.data         <= pkt_combs.data4;
+                }
+                default: {
+                    ais_request.t.offset       <= 6;
+                    ais_request.t.byte_enables <= 0x3f;
+                    ais_request.t.data  <= pkt_combs.data5;
+                    ais_state.fsm_state <= ais_fsm_write_pkt_complete;
+                }
+                }
+            }
+        }
+        case ais_action_write_pkt_complete : {
+            if (ais_combs.can_take_request) {
+                ais_state.fsm_state <= ais_fsm_idle;
+                ais_state.completed <= 1;
+                ais_request.valid <= 1;
+                ais_request.t.op           <= ais_req_complete_pkt;
+                ais_request.t.data         <= bundle(52b0, ais_state.payload_len + 42);
+            }
+        }
+        }
+
+    }
+
+    /*b AIS response
+     */
+    clocked bit sram_is_reading = 0;
+    clocked bit[8] sram_id = 0;
+    comb t_ais_cfg ais_cfg;
+    net t_sram_access_req sram_access_req;
+    comb t_sram_access_resp sram_access_resp;
+    net bit[64] ais_sram_data_out;
+    net t_fifo_status ais_fifo_status;
+    clocked bit init_done = 0;
+    ais : {
+        axi4s64_initiator_sram ais( clk <- clk,
+                                    reset_n <= reset_n,
+                                    force_reset <= 1b0,
+
+                                    ais_request <= ais_request,
+                                    ais_ready => ais_ready,
+
+                                    sram_access_req => sram_access_req,
+                                    sram_access_resp <= sram_access_resp,
+
+                                    tx_axi4s_tready <= tx_axi4s_tready,
+                                    tx_axi4s => tx_axi4s,
+
+                                    ais_cfg <= ais_cfg,
+                                    fifo_status => ais_fifo_status );
+        se_sram_srw_2048x64_we8 ais_sram( sram_clock <- clk,
+                                          select <= sram_access_req.valid,
+                                          address <= sram_access_req.address[11;0],
+                                          read_not_write <= sram_access_req.read_not_write,
+                                          write_enable <= sram_access_req.byte_enable,
+                                          write_data <= sram_access_req.write_data,
+                                          data_out => ais_sram_data_out);
+        sram_access_resp.ack = 1;
+        sram_access_resp.valid = sram_is_reading;
+        sram_access_resp.data = ais_sram_data_out;
+        sram_access_resp.id = sram_id;
+        sram_is_reading <= sram_access_req.valid && sram_access_req.read_not_write;
+        sram_id <= sram_access_req.id;
+        ais_cfg = {buffer_start = 0,
+            buffer_end = 2048,
+            poll_interval = 20,
+            changed = !init_done
+        };
+        if (!init_done) {
+            init_done <= 1;
+        }
+    }
+
+    /*b Done
+     */
+}
+
+/*a Editor preferences and notes
+mode: c ***
+c-basic-offset: 4 ***
+c-default-style: (quote ((c-mode . "k&r") (c++-mode . "k&r"))) ***
+outline-regexp: "/\\\*a\\\|[\t ]*\/\\\*[b-z][\t ]" ***
+*/
