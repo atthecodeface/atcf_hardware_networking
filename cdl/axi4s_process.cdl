@@ -1,0 +1,159 @@
+/** @copyright (C) 2016-2017,  Gavin J Stark.  All rights reserved.
+ *
+ * @copyright
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0.
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ *
+ * @file   axi4s_process.cdl
+ * @brief  AXI pipeline with a process function invoked on the first N AXI4s words
+ *
+ * CDL implementation of an arbitrary AXI4S header processor
+ *
+ */
+/*a Includes
+ */
+include "axi4s.h"
+include "axi4s_modules.h"
+include "utils::fifo_status.h"
+
+/*a Module */
+module axi4s_process( clock clk         "System clock",
+                      input bit reset_n "Active low reset",
+
+                      input t_axi4s128  rx_axi4s,
+                      output bit        rx_axi4s_tready,
+                      input bit         tx_axi4s_tready,
+                      output t_axi4s128 tx_axi4s
+    )
+"""
+AXI4S processor to generate/update first flit of an AXI4S bus based on processing the first N flits.
+
+"""
+{
+    /*b Clock and reset */
+    default clock clk;
+    default reset active_low reset_n;
+
+    clocked bit start = 1;
+    clocked bit drop = 0;
+    
+    net bit rx_axi4s_tready;
+    net t_axi4s128 tx_axi4s;
+
+    net t_axi4s128 ib_axi4s;
+    comb bit ib_axi4s_tready;
+    net t_axi4s128 data0;
+    net t_axi4s128 data1;
+    net t_axi4s128 data2;
+    net t_axi4s128 data3;
+    net t_axi4s128 data4;
+    net t_axi4s128 data5;
+    net t_axi4s128 data6;
+    net t_axi4s128 data7;
+    net t_fifo_status ib_fifo_status;
+    net t_fifo_status ob_fifo_status;
+    net t_map_result map_result;
+    net t_axi4s128 mapped_data;
+    comb t_axi4s128 ob_axi4s;
+    net bit ob_tready;
+
+    /*b Input and output buffers */
+    input_and_output_buffers """
+    """ : {
+        axi4s128_insertion_buffer_8 input_buffer( clk <- clk, reset_n <= reset_n,
+                                                 req_in <= rx_axi4s,
+                                                 ack_in => rx_axi4s_tready,
+                                                 req_out => ib_axi4s,
+                                                 ack_out <= ib_axi4s_tready,
+                                                 data0 => data0,
+                                                 data1 => data1,
+                                                 data2 => data2,
+                                                 data3 => data3,
+                                                 data4 => data4,
+                                                 data5 => data5,
+                                                 data6 => data6,
+                                                 data7 => data7,
+                                                 fifo_status => ib_fifo_status );
+
+        axi4s_process_map map(clk <- clk,
+                              reset_n <= reset_n,
+                              output_ready <= ob_tready,
+                              start <= start,
+                              data0 <= data0,
+                              data1 <= data1,
+                              data2 <= data2,
+                              data3 <= data3,
+                              data4 <= data4,
+                              data5 <= data5,
+                              data6 <= data6,
+                              data7 <= data7,
+                              map_result => map_result,
+                              mapped_data => mapped_data );
+
+        axi4s128_double_buffer output_buffer( clk <- clk, reset_n <= reset_n,
+                                             req_in <= ob_axi4s,
+                                             ack_in => ob_tready,
+                                             req_out => tx_axi4s,
+                                             ack_out <= tx_axi4s_tready,
+                                             fifo_status => ob_fifo_status );
+
+        
+    }
+
+    process_result """
+    """ : {
+        ib_axi4s_tready = 0;
+        ob_axi4s = ib_axi4s;
+        full_switch (map_result) {
+        case mr_drop : {
+            ib_axi4s_tready = 0;
+            ob_axi4s.valid = 0;
+        }
+        case mr_block : {
+            ib_axi4s_tready = 0;
+            ob_axi4s.valid = 0;
+        }
+        case mr_remap : {
+            ib_axi4s_tready = ob_tready;
+            ob_axi4s = mapped_data;
+        }
+        default : { // Pass through
+            ib_axi4s_tready = ob_tready;
+        }
+        }
+
+        if (drop) {
+            ob_axi4s.valid = 0;
+            ib_axi4s_tready = 1;
+        }
+        if (ib_axi4s.valid && ib_axi4s_tready) {
+            if (start && map_result==mr_drop) {
+                drop <= 1;
+            }
+            if (ib_axi4s.t.last) {
+                drop <= 0;
+            }
+        }
+
+        if (ob_axi4s.valid && ob_tready) {
+            start <= ob_axi4s.t.last;
+        }
+    }
+
+    /*b Done
+     */
+}
+
+/*a Editor preferences and notes
+mode: c ***
+c-basic-offset: 4 ***
+c-default-style: (quote ((c-mode . "k&r") (c++-mode . "k&r"))) ***
+outline-regexp: "/\\\*a\\\|[\t ]*\/\\\*[b-z][\t ]" ***
+*/

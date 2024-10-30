@@ -1,0 +1,179 @@
+/** @copyright (C) 2016-2017,  Gavin J Stark.  All rights reserved.
+ *
+ * @copyright
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0.
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ *
+ * @file   axi4s_process.cdl
+ * @brief  AXI pipeline with a process function invoked on the first N AXI4s words
+ *
+ * CDL implementation of an arbitrary AXI4S header processor
+ *
+ */
+/*a Includes
+ */
+include "axi4s.h"
+
+/*a Constants */
+constant bit[48] ETH_MAC = 48h_123456789abc;
+constant bit[32] IP_ADDR = 32h_0a_01_11_7f;
+constant bit[16] UDP_PORT = 16h_0256;
+
+/*a Module */
+module axi4s_process8_map_udp( clock clk         "System clock",
+                               input bit reset_n "Active low reset",
+
+                               input bit start "Asserted if data0 is start of packet",
+                               input t_axi4s128  data0,
+                               input t_axi4s128  d1,
+                               input t_axi4s128  d2,
+                               input t_axi4s128  d3,
+                               input t_axi4s128  d4,
+                               input t_axi4s128  d5,
+                               input t_axi4s128  d6,
+                               input t_axi4s128  d7,
+                               output t_map_result map_result,
+                               output t_axi4s128  mapped_data
+    )
+"""
+Default map
+"""
+{
+    comb bit is_valid "Asserted if data0, data1 and data2 are valid";
+    comb bit is_short "Asserted if fewer than 48 bytes valid";
+
+    comb bit[48] eth_dmac;
+    comb bit[48] eth_smac;
+    comb bit[16] eth_proto;
+    comb bit eth_is_ipv4;
+    comb bit eth_is_bcast;
+    comb bit eth_is_mac;
+
+    comb bit[8] ipv4_v;
+    comb bit[8] ipv4_dscp;
+    comb bit[16] ipv4_len;
+    comb bit[16] ipv4_id;
+    comb bit[16] ipv4_frag;
+    comb bit[8] ipv4_ttl;
+    comb bit[8] ipv4_proto;
+    comb bit[16] ipv4_csum;
+    comb bit[32] ipv4_src;
+    comb bit[32] ipv4_dst;
+    comb bit ipv4_is_dst;
+
+    comb bit[16] udp_src;
+    comb bit[16] udp_dst;
+    comb bit[16] udp_len;
+    comb bit[16] udp_csum;
+    comb bit udp_is_dst;
+
+    axi4s_parse  """
+    """: {
+        is_valid = data0.valid & d1.valid && d2.valid;
+        is_short = (data0.valid && data0.t.last) ||
+            (d1.valid && d1.t.last) ||
+            (d2.valid && d2.t.last);
+    }
+
+    // en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+    // options=400<CHANNEL_IO>
+    // ether 66:61:18:6d:43:cd
+    // inet6 fe80::1469:1102:f91b:8b24%en0 prefixlen 64 secured scopeid 0x6
+    // inet 10.1.17.163 netmask 0xffffff00 broadcast 10.1.17.255
+    //
+    // 12:13:48.628930 IP 17.250.80.220.https > 10.1.17.163.56157: quic, protected
+    // 0x0000:  6661 186d 43cd 5254 0050 bb97 0800 4500
+    // 0x0010:  003c 0000 4000 3811 c437 11fa 50dc 0a01
+    // 0x0020:  11a3 01bb db5d 0028 9bf9 5172 5e0c 9018
+    // 0x0030:  8e75 c3c1 cacd c33c 3570 ad72 0b9c 8229
+    // 0x0040:  f0df 1c72 7f93 f901 f1a8
+
+    ethernet_parse  """
+    """: {
+        eth_dmac = bundle(data0.t.data0[8;0], data0.t.data0[8;8], data0.t.data0[8;16], data0.t.data0[8;24], data0.t.data0[8;32], data0.t.data0[8;40]);
+        eth_smac = bundle(data0.t.data0[8;48], data0.t.data0[8;56], data0.t.data1[8;0], data0.t.data1[8;8], data0.t.data1[8;16], data0.t.data1[8;24]);
+        eth_proto = bundle(data0.t.data1[8;32], data0.t.data1[8;40]);
+    
+        eth_is_bcast = (eth_dmac == 48hffffffffffff);
+        eth_is_mac   = (eth_dmac == ETH_MAC);
+        eth_is_ipv4  = (eth_proto == 0x0800);
+    }
+    ipv4_parse  """
+    """: {
+        ipv4_v = data0.t.data1[8;48];
+        ipv4_dscp = data0.t.data1[8;56];
+        ipv4_len  = bundle(d1.t.data0[8;0], d1.t.data0[8;8]);
+        ipv4_id   = bundle(d1.t.data0[8;16], d1.t.data0[8;24]);
+        ipv4_frag = bundle(d1.t.data0[8;32], d1.t.data0[8;40]);
+        ipv4_ttl   = d1.t.data0[8;48];
+        ipv4_proto = d1.t.data0[8;56];
+        ipv4_csum  = bundle(d1.t.data1[8;0], d1.t.data1[8;8]);
+        ipv4_src = bundle(d1.t.data1[8;16], d1.t.data1[8;24], d1.t.data1[8;32], d1.t.data1[8;40]);
+        ipv4_dst = bundle(d1.t.data1[8;48], d1.t.data1[8;56], d2.t.data0[8;0], d2.t.data0[8;8]);
+
+        // version 4, hlen 5, proto UDP (11), no frag (frag 0 or 4000), len 0x3c ish
+        ipv4_is_dst = ipv4_dst == IP_ADDR;
+    }
+    udp_parse  """
+    """: {
+        udp_src = bundle(d2.t.data0[8;16], d2.t.data0[8;24]);
+        udp_dst = bundle(d2.t.data0[8;32], d2.t.data0[8;40]);
+        udp_len = bundle(d2.t.data0[8;48], d2.t.data0[8;56]);
+        udp_csum = bundle(d2.t.data1[8;0], d2.t.data1[8;8]);
+        udp_is_dst = udp_dst == UDP_PORT;
+    }
+    udp_admit_logic """
+    Admit a packet if it is unicast ethernet clean IPv4 to dst with correct UDP port
+
+    This means mr_drop if it is a valid start packet that does not indicate admit packet,
+    and mr_pass if it is a valid start packet that indicates admit packet.
+
+    If start and not valid then hold
+
+    If start and valid short then drop
+
+    If not start then just pass; if the packet is being dropped, the processor will drop it
+
+    Note ipv4_len should be udp_len+20; udp_len should be 8 plus udp payload and there should be that many more bytes in the packet (which we cannot check)
+    """: {
+        map_result = mr_pass;
+        mapped_data = data0;
+        if (start) {
+            if (is_valid) {
+                map_result = mr_pass;
+                if (is_short) {
+                    map_result = mr_drop;
+                }
+                if (!eth_is_mac || !eth_is_ipv4) {
+                    map_result = mr_drop;
+                }
+                if (ipv4_v != 0x45) {
+                    map_result = mr_drop;
+                }
+                if (ipv4_frag != 0x4000) {
+                    map_result = mr_drop;
+                }
+                if (ipv4_proto != 0x11) {
+                    map_result = mr_drop;
+                }
+                if (!ipv4_is_dst) {
+                    map_result = mr_drop;
+                }
+                if (!udp_is_dst) {
+                    map_result = mr_drop;
+                }
+            } else {
+                map_result = mr_block;
+            }
+        } else {
+            map_result = mr_pass;
+            }
+        }
+}
