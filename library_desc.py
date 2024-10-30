@@ -9,7 +9,7 @@ class Axi4sModules(cdl_desc.Modules):
     name = "axi4s"
     src_dir      = "cdl"
     tb_src_dir   = "tb_cdl"
-    libraries = {"std":True, "utils":True}
+    libraries = {"std":True, "utils":True, "apb":True}
     cdl_include_dirs = ["cdl"]
     export_dirs = cdl_include_dirs + [ src_dir ]
     modules = []
@@ -31,7 +31,7 @@ class Axi4sBFM(cdl_desc.Modules):
     modules = []
     modules += [ CSrc("ef_object", src_dir="csrc") ]
     modules += [ CSrc("axi_types", src_dir="csrc") ]
-    modules += [ CModel("axi4s32_master_slave", src_dir="cmodel") ]
+    modules += [ CModel("axi4s_th", src_dir="cmodel") ]
     # modules += [ Csrc("axi_master", src_dir="csrc") ]
     pass
 

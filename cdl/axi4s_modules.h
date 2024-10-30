@@ -22,6 +22,8 @@
 /*a Includes */
 include "apb::apb.h"
 include "utils::fifo_status.h"
+include "utils::sram_access.h"
+include "parse.h"
 include "axi4s.h"
 
 /*m axi4s32_fifo_4 */

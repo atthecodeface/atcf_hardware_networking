@@ -22,9 +22,8 @@
  *
  *  rmn:generic_valid_ack_fifo=axi4s32_fifo_4
  *
- *  dc:fifo_depth=3
+ *  dc:fifo_depth=4
  *
- * The FIFO depth in the constant can be 1 less than the required size as the FIFO as an output register
  */
 /*a Module */
 include "utils::generic_valid_ack_fifo.cdl"
