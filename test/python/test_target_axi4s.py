@@ -24,7 +24,8 @@ from random import Random
 from regress.apb.structs import t_apb_request, t_apb_response
 from regress.apb.bfm     import ApbMaster
 from regress.apb         import target_sram_interface
-from regress.networking  import apb_target_axi4s
+from regress.networking  import apb_target_axi4s, axi4s
+from regress.networking.axi4s import Axi4sT, Pkt
 from cdl.sim     import ThExecFile
 from cdl.sim     import HardwareThDut
 from cdl.sim     import TestCase
@@ -45,31 +46,7 @@ class ApbAddressMap(csr.Map):
           csr.MapMap(offset=3<<16, name="rx_sram", map=target_sram_interface.SramInterfaceAddressMap),
          ]
     pass
-#c Axi4sT
-class Axi4sT(object):
-    data:int
-    strb:int
-    last:bool
-    keep:Optional[int]=None
-    user:Optional[int]=None
-    id  :Optional[int]=None
-    dest:Optional[int]=None
-    def __init__(self, data, strb, last):
-        self.data = data
-        self.strb = strb
-        self.last = last
-        pass
-    def compare(self, th, axi4s):
-        th.compare_expected("axi4s data %s / %08x"%(str(self),axi4s.get("data")), self.data, axi4s.get("data"))
-        th.compare_expected("axi4s last %s"%(str(self)), self.last, axi4s.get("last"))
-        th.compare_expected("axi4s strb %s"%(str(self)), self.strb, axi4s.get("strb"))
-        return
-    
-    def __str__(self):
-        r = "%08x:%x:%d"%(self.data,self.strb,int(self.last))
-        return r
 
-    pass
 #f rand_int32
 def rand_int32(random):
     v0 = random.randrange(0,0x10000)
@@ -121,6 +98,7 @@ class Axi4sTestBase(ThExecFile):
         self.rx_random = Random()
         self.rx_random.seed(self.rx_random_seed)
         self.configure()
+        self.axi_bfm.axi4s("rx_axi")
         self.spawn(self.tx_checker)
         pass
 
@@ -133,6 +111,7 @@ class Axi4sTestBase(ThExecFile):
         # print("%08x:%08x"%(self.tx_sram_address,data))
         self.tx_sram_address = (self.tx_sram_address+1) % self.tx_buffer_end
         pass
+
     #f tx_sram_write_axi
     def tx_sram_write_axi(self, data:int, address:Optional[int]=None):
         if address is not None:
@@ -143,7 +122,12 @@ class Axi4sTestBase(ThExecFile):
             pass
         self.apb.write(address=self.axi4s_map.tx_data_inc.Address(),data=data)
         self.tx_sram_address = self.tx_sram_address+1
+        if self.tx_sram_address == self.tx_buffer_end:
+            self.tx_sram_address = 0
+            # The APB target AXI4s automatically resets its address to 0
+            pass
         pass
+
     #f tx_sram_write_apb
     def tx_sram_write_apb(self, data:int, address:Optional[int]=None):
         if address is not None:
@@ -156,9 +140,10 @@ class Axi4sTestBase(ThExecFile):
         self.tx_sram_address = self.tx_sram_address+1
         if self.tx_sram_address == self.tx_buffer_end:
             self.tx_sram_address = 0
-            self.tx_sram_addr.write(0)
+            self.tx_sram_addr.write(self.tx_sram_address)
             pass
         pass
+
     #f tx_update_pkt_axi_addr
     def tx_update_pkt_axi_addr(self):
         v = self.apb.read(address=self.axi4s_map.tx_ptr.Address())
@@ -177,39 +162,49 @@ class Axi4sTestBase(ThExecFile):
         pass
             
     #f tx_packet
-    def tx_packet(self, user:int, data:List[int], last_bytes=4):
-        self.tx_wait_for_room(len(data)+4)
+    def tx_packet(self, user:int=0, pkt=None):
+
+        byte_len = len(pkt)
+        flits = pkt.as_axi4s(4)
+        num_flits = len(flits)
+
+        for f in flits:
+            self.expected_tx_axi4s.append(f)
+            pass
+
+        # Wait for room for pkt status, user, flits, next pkt status
+        self.tx_wait_for_room(num_flits+4)
+
+        # Skip pkt status, write user
         tx_data_ptr = (self.tx_pkt_ptr+1) % self.tx_buffer_end
         self.tx_sram_write(address=tx_data_ptr, data=user)
+
+        # Write data from flits
         tx_data_ptr = (tx_data_ptr+1) % self.tx_buffer_end
         dn = 0
-        for d in data:
-            s = 15
-            last = False
-            if dn==len(data)-1:
-                s=(1<<last_bytes)-1
-                last=True
-                pass
-            dn=dn+1
-            e = Axi4sT(data=d, strb=s, last=last)
-            self.expected_tx_axi4s.append(e)
+        for f in flits:
+            d = f.data
             self.tx_sram_write(data=d)
             tx_data_ptr = (tx_data_ptr+1) % self.tx_buffer_end
             pass
+
+        # Clear next pkt status
         self.tx_sram_write(data=0)
-        self.tx_sram_write(address=self.tx_pkt_ptr, data=(len(data)*4-4+last_bytes))
+
+        # Write this pkt status
+        self.tx_sram_write(address=self.tx_pkt_ptr, data=byte_len)
         self.tx_pkt_ptr = tx_data_ptr
         pass
+
     #f tx_packet_random
     def tx_packet_random(self, random):
         user = rand_int32(random)
         num_bytes = 4+random.randrange(100)
-        num_words = (num_bytes+3) // 4
-        last_bytes = num_bytes - 4*(num_words-1)
-        # print(last_bytes)
-        data = [rand_int32(random) for i in range(num_words)]
-        self.tx_packet(user=user, data=data, last_bytes=last_bytes)
+        data = bytes([random.randrange(256) for i in range(num_bytes)])
+        pkt = Pkt(data)
+        self.tx_packet(user=user, pkt=pkt)
         pass
+
     #f tx_checker
     def tx_checker(self):
         self.axi_bfm.axi4s("tx_checker_axi")
@@ -229,6 +224,17 @@ class Axi4sTestBase(ThExecFile):
         self.verbose.message("tx ptrs %08x : %08x"%(self.tx_pkt_ptr, tx_ptr))
         self.compare_expected("Transmit packet pointer on completion", self.tx_pkt_ptr<<16, (tx_ptr &~ 0xffff))
         pass
+
+    #f rx_packet
+    def rx_packet(self, pkt):
+        flits = pkt.as_axi4s(4)
+        for f in flits:
+            f.set_axi4s(self.rx_axi)
+            self.rx_axi.master_enqueue()
+            pass
+        self.bfm_wait(100)
+        pass
+
     #f configure
     def configure(self):
         cfg = self.apb.reg(self.axi4s_map.config)
@@ -261,12 +267,25 @@ class Axi4sTestBase(ThExecFile):
     #f All done
     pass
 
+#c Axi4sTest_Rx_0
+class Axi4sTest_Rx_0(Axi4sTestBase):
+    #f run
+    def run(self):
+        self.rx_packet(Pkt(b"abcdefghijklmnopqrs"))
+        self.rx_packet(Pkt(b"abcdefghijklmnopqrst"))
+        self.rx_packet(Pkt(b"abcdefghijklmnopqrstu"))
+        self.rx_packet(Pkt(b"abcdefghijklmnopqrstuv"))
+        pass
+    pass
+
 #c Axi4sTest_Tx_0
 class Axi4sTest_Tx_0(Axi4sTestBase):
     #f run
     def run(self):
-        self.tx_packet(0x12345678, [0,1,2,3,4,5,6],3)
-        self.tx_packet(0x12345678, [0,1,2,3,4,5,6],3)
+        self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrs"))
+        self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrst"))
+        self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrstu"))
+        self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrstuv"))
         pass
     pass
 
@@ -274,16 +293,22 @@ class Axi4sTest_Tx_0(Axi4sTestBase):
 class Axi4sTest_Tx_1(Axi4sTestBase):
     #f run
     def run(self):
-        for i in range(100):
-            self.tx_packet((i*0xfec12364d) & 0xffffffff,
-                               [0,1,2,3,4,5,6], 1+(i&3))
-            pass
+        for i in range(25):
+            self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrs"))
+            self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrst"))
+            self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrstu"))
+            self.tx_packet(user=0x12345678, pkt=Pkt(b"abcdefghijklmnopqrstuv"))
         pass
     pass
 
 #c Axi4sTest_Tx_Random_0
 class Axi4sTest_Tx_Random_0(Axi4sTestBase):
     num_pkts = 1000 # 100 packets takes about 4k cycles with msg to write sram
+    x = Pkt()
+    print(len(x))
+    x.push(bytes.fromhex('0102030405'))
+    print(len(x))
+    print(x.as_axi4s(4))
     #f run
     def run(self):
         for i in range(self.num_pkts):
@@ -296,28 +321,31 @@ class Axi4sTest_Tx_Random_0(Axi4sTestBase):
 #c ApbTargetAxi4sHw
 t_axi4s32 = {"valid":1, "t":{"data":32, "last":1, "user":64, "strb":4, "keep":4, "id":64, "dest":64}}
 class ApbTargetAxi4sHw(HardwareThDut):
-    clock_desc = [("aclk",(0,1,1)),
+    clock_desc = [("clk",(0,1,1)),
     ]
-    reset_desc = {"name":"areset_n", "init_value":0, "wait":5}
-    th_module_type = "axi4s32_master_slave"
+    reset_desc = {"name":"reset_n", "init_value":0, "wait":5}
+    th_module_type = "axi4s_th"
     module_name    = "tb_apb_target_axi4s"
     dut_inputs  = {"apb_request":t_apb_request,
-                   "slave_axi4s_tready":1,
-                   "master_axi4s":t_axi4s32,
+                   "dut_axi4s_tready":1,
+                   "th_axi4s":t_axi4s32,
     }
     dut_outputs = {"apb_response":t_apb_response,
-                   "master_axi4s_tready":1,
-                   "slave_axi4s":t_axi4s32,
+                   "th_axi4s_tready":1,
+                   "dut_axi4s":t_axi4s32,
     }
-    th_bfm_connections = ["slave_axi4s_tready",
-                          "master_axi4s_tready",
-                          "slave_axi4s",
-                          "master_axi4s"]
+    th_bfm_connections = ["th_axi4s_tready",
+                          "dut_axi4s_tready",
+                          "th_axi4s",
+                          "dut_axi4s"]
     pass
 
 #a Simulation test classes
 #c ApbTargetAxi4s_Msg
 class ApbTargetAxi4s_Msg(TestCase):
+    """
+    Using sim backdoor to write Tx SRAM
+    """
     hw = ApbTargetAxi4sHw
     kwargs = {
     # "verbosity":0,
@@ -327,12 +355,15 @@ class ApbTargetAxi4s_Msg(TestCase):
     _tests = {
         "tx_0"        :  (Axi4sTest_Tx_0,40*1000,  kwargs),
         "tx_1"        :  (Axi4sTest_Tx_1,40*1000,  kwargs),
-        "tx_random_0" :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
+#        "tx_random_0" :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
     }
     pass
 
 #c ApbTargetAxi4s_Axi
-class ApbTargetAxi4s_Axi(ApbTargetAxi4s_Msg):
+class ApbTargetAxi4s_Axi(TestCase):
+    """
+    Using apb_target_axi4s to write SRAM
+    """
     hw = ApbTargetAxi4sHw
     kwargs = {
         "th_args":{"tx_sram_write":Axi4sTestBase.tx_sram_write_axi},
@@ -341,11 +372,15 @@ class ApbTargetAxi4s_Axi(ApbTargetAxi4s_Msg):
         "tx_0"        :  (Axi4sTest_Tx_0,40*1000,  kwargs),
         "tx_1"        :  (Axi4sTest_Tx_1,40*1000,  kwargs),
         "tx_random_0" :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
+#        "smoke"       :  (Axi4sTest_Tx_1,40*1000,  kwargs),
     }
     pass
 
 #c ApbTargetAxi4s_Apb
-class ApbTargetAxi4s_Apb(ApbTargetAxi4s_Msg):
+class ApbTargetAxi4s_Apb(TestCase):
+    """
+    Using apb_target_sram to write TxSram
+    """
     hw = ApbTargetAxi4sHw
     kwargs = {
         "th_args":{"tx_sram_write":Axi4sTestBase.tx_sram_write_apb},
@@ -354,7 +389,21 @@ class ApbTargetAxi4s_Apb(ApbTargetAxi4s_Msg):
         "tx_0"        :  (Axi4sTest_Tx_0,40*1000,  kwargs),
         "tx_1"        :  (Axi4sTest_Tx_1,40*1000,  kwargs),
         "tx_random_0" :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
-        "smoke"       :  (Axi4sTest_Tx_Random_0,200*1000,  kwargs),
+#        "smoke"       :  (Axi4sTest_Tx_1,40*1000,  kwargs),
+    }
+    pass
+
+#c ApbTargetAxi4s_Apb
+class ApbTargetAxi4s_Apb(TestCase):
+    """
+    Using apb_target_sram to write TxSram
+    """
+    hw = ApbTargetAxi4sHw
+    kwargs = {
+        "th_args":{"tx_sram_write":Axi4sTestBase.tx_sram_write_apb},
+    }
+    _tests = {
+        "smoke"       :  (Axi4sTest_Rx_0,40*1000,  kwargs),
     }
     pass
 

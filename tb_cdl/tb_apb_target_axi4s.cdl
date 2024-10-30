@@ -32,16 +32,16 @@ include "axi4s_modules.h"
 constant integer tx_poll_count_restart_value=10;
 
 /*a Module */
-module tb_apb_target_axi4s( clock aclk         "System clock",
-                            input bit areset_n "Active low reset",
+module tb_apb_target_axi4s( clock clk         "System clock",
+                            input bit reset_n "Active low reset",
 
                             input  t_apb_request  apb_request  "APB request",
                             output t_apb_response apb_response "APB response",
 
-                            input bit        slave_axi4s_tready,
-                            output t_axi4s32 slave_axi4s,
-                            input t_axi4s32  master_axi4s,
-                            output bit       master_axi4s_tready
+                            input bit        dut_axi4s_tready,
+                            output t_axi4s32 dut_axi4s,
+                            input t_axi4s32  th_axi4s,
+                            output bit       th_axi4s_tready
     )
 {
     comb  t_apb_request  axi4s_apb_request  "APB request";
@@ -51,8 +51,8 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
     net t_apb_response tx_sram_apb_response "APB response";
     net t_apb_response rx_sram_apb_response "APB response";
 
-    net t_axi4s32 slave_axi4s;
-    net bit       master_axi4s_tready;
+    net t_axi4s32 dut_axi4s;
+    net bit       th_axi4s_tready;
 
     net t_sram_access_req  tx_sram_access_req  "SRAM access request";
     net t_sram_access_req  tx_apb_sram_access_req  "SRAM access request";
@@ -70,9 +70,14 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
     comb t_sram_access_resp rx_sram_resp;
     net bit[32] rx_sram_data_out;
 
+    default clock clk;
+    default reset active_low reset_n;
+    clocked bit tx_sram_did_read = 0;
+    clocked bit rx_sram_did_read = 0;
+
     code: {
-        apb_target_axi4s dut( clk <- aclk,
-                          reset_n <= areset_n,
+        apb_target_axi4s dut( clk <- clk,
+                          reset_n <= reset_n,
 
                           apb_request  <= axi4s_apb_request,
                           apb_response => axi4s_apb_response,
@@ -82,19 +87,19 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
                           tx_sram_access_resp <= tx_sram_access_resp,
                           rx_sram_access_resp <= rx_sram_access_resp,
 
-                          tx_axi4s_tready <= slave_axi4s_tready,
-                          tx_axi4s => slave_axi4s,
-                          rx_axi4s <= master_axi4s,
-                          rx_axi4s_tready => master_axi4s_tready );
+                          tx_axi4s_tready <= dut_axi4s_tready,
+                          tx_axi4s => dut_axi4s,
+                          rx_axi4s <= th_axi4s,
+                          rx_axi4s_tready => th_axi4s_tready );
 
-        apb_target_sram_interface tx_sram_apb( clk <- aclk, reset_n <= areset_n,
+        apb_target_sram_interface tx_sram_apb( clk <- clk, reset_n <= reset_n,
                                                apb_request  <= tx_sram_apb_request,
                                                apb_response  => tx_sram_apb_response,
                                                // sram_ctrl => ,
                                                sram_access_req  => tx_apb_sram_access_req,
                                                sram_access_resp <= tx_apb_sram_access_resp );
 
-        apb_target_sram_interface rx_sram_apb( clk <- aclk, reset_n <= areset_n,
+        apb_target_sram_interface rx_sram_apb( clk <- clk, reset_n <= reset_n,
                                                apb_request  <= rx_sram_apb_request,
                                                apb_response  => rx_sram_apb_response,
                                                // sram_ctrl => ,
@@ -115,7 +120,7 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
         apb_response.pready  = apb_response.pready   & tx_sram_apb_response.pready;
         apb_response.pready  = apb_response.pready   & rx_sram_apb_response.pready;
 
-        sram_access_mux_2 tx_sram_mux( clk<-aclk, reset_n<=areset_n,
+        sram_access_mux_2 tx_sram_mux( clk<-clk, reset_n<=reset_n,
                                        req_a  <= tx_sram_access_req,
                                        resp_a => tx_sram_access_resp,
 
@@ -125,7 +130,7 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
                                        req => tx_sram_req,
                                        resp <= tx_sram_resp );
 
-        se_sram_srw_65536x32 tx_sram( sram_clock <- aclk,
+        se_sram_srw_65536x32 tx_sram( sram_clock <- clk,
                                       select <= tx_sram_req.valid,
                                       address <= tx_sram_req.address[16;0],
                                       read_not_write <= tx_sram_req.read_not_write,
@@ -135,8 +140,10 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
         tx_sram_resp = {*=0};
         tx_sram_resp.ack = 1; // dedicated to sram access ports
         tx_sram_resp.data[32;0]  = tx_sram_data_out;
+        tx_sram_resp.valid = tx_sram_did_read;
+        tx_sram_did_read <= tx_sram_req.valid && tx_sram_req.read_not_write;
 
-        sram_access_mux_2 rx_sram_mux( clk<-aclk, reset_n<=areset_n,
+        sram_access_mux_2 rx_sram_mux( clk<-clk, reset_n<=reset_n,
                                        req_a  <= rx_sram_access_req,
                                        resp_a => rx_sram_access_resp,
 
@@ -146,7 +153,7 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
                                        req => rx_sram_req,
                                        resp <= rx_sram_resp );
 
-        se_sram_srw_65536x32 rx_sram( sram_clock <- aclk,
+        se_sram_srw_65536x32 rx_sram( sram_clock <- clk,
                                       select <= rx_sram_req.valid,
                                       address <= rx_sram_req.address[16;0],
                                       read_not_write <= rx_sram_req.read_not_write,
@@ -156,6 +163,8 @@ module tb_apb_target_axi4s( clock aclk         "System clock",
         rx_sram_resp = {*=0};
         rx_sram_resp.ack = 1; // dedicated to sram access ports
         rx_sram_resp.data[32;0]  = rx_sram_data_out;
+        rx_sram_resp.valid = rx_sram_did_read;
+        rx_sram_did_read <= rx_sram_req.valid && rx_sram_req.read_not_write;
 
     }
 }

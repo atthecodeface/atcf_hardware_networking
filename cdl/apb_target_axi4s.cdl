@@ -461,7 +461,7 @@ and the word at the write pointer is zeroed.
             apb_state.access <= apb_request.pwrite ? access_write_tx_data : access_none;
         }
         case apb_address_tx_data_next: {
-                    apb_state.access <= apb_request.pwrite ? access_write_tx_data_next : access_none;
+            apb_state.access <= apb_request.pwrite ? access_write_tx_data_next : access_none;
         }
         }
         if (!apb_request.psel || (apb_request.penable && apb_response.pready)) {
@@ -506,7 +506,7 @@ and the word at the write pointer is zeroed.
             rx_state.axi4s <= rx_axi4s;
         }
         rx_combs.axi_is_last     = rx_state.axi4s.t.last;
-        rx_combs.axi_bytes_valid = rx_state.axi4s.t.strb;
+        rx_combs.axi_bytes_valid = rx_state.axi4s.t.keep & rx_state.axi4s.t.strb;
         rx_combs.user = rx_state.axi4s.t.user[32;0];
         rx_combs.axi_data = rx_state.axi4s.t.data;
         rx_axi4s_tready = rx_combs.axi4s_ready;
@@ -547,8 +547,19 @@ and the word at the write pointer is zeroed.
         if (rx_combs.pkt_ptr_diff[15]) {
             rx_combs.pkt_words = rx_combs.pkt_ptr_diff + rx_state.buffer_end;
         }
+
+        // Valid for rx_action_write_next_status (when data in hand is last)
         rx_combs.pkt_status       = 0;
-        rx_combs.pkt_status[10;0] = rx_combs.pkt_words[10;0];
+        if (rx_combs.axi_bytes_valid[1]) {
+            rx_combs.pkt_status[2;0]       = 1;
+        }
+        if (rx_combs.axi_bytes_valid[2]) {
+            rx_combs.pkt_status[2;0]       = 2;
+        }
+        if (rx_combs.axi_bytes_valid[3]) {
+            rx_combs.pkt_status[2;0]       = 3;
+        }
+        rx_combs.pkt_status[10;2] = rx_combs.pkt_words[10;0];
         rx_combs.pkt_status[31]   = 1;
 
         if (apb_combs.rx_commit) {
@@ -926,7 +937,7 @@ and the word at the write pointer is zeroed.
                 tx_state.axi4s.t.last   <= tx_sram_access_resp.id[3];
                 tx_state.axi4s.t.data   <= tx_sram_access_resp.data[32;0];
                 tx_state.axi4s.t.strb   <= tx_sram_access_resp.id[4;4];
-                tx_state.axi4s.t.keep   <= 0xf;
+                tx_state.axi4s.t.keep   <= tx_sram_access_resp.id[4;4];
             }
         }
     }
