@@ -22,6 +22,7 @@
  */
 include "std::srams.h"
 include "utils::sram_access.h"
+include "utils::debug.h"
 include "apb::apb.h"
 include "apb::apb_targets.h"
 include "apb::apb_masters.h"
@@ -74,6 +75,9 @@ module tb_axi_debug_apb( clock clk         "System clock",
     default reset active_low reset_n;
     clocked bit sram_did_read = 0;
 
+    net t_dbg_master_request dbg_master_req;
+    net t_dbg_master_response dbg_master_resp;
+
     code: {
         axi4s32_to_axi4s64 axi_widen_to_64( clk <- clk,
                             reset_n <= reset_n,
@@ -98,15 +102,22 @@ module tb_axi_debug_apb( clock clk         "System clock",
                             tx_axi4s_tready <= apb_axi4s64_tready
             );
 
-        axi4s64_apb_master axi_to_apb( clk <- clk,
+        axi4s64_dbg_master axi_to_apb( clk <- clk,
                                       reset_n <= reset_n,
                                       rx_axi4s <= apb_axi4s64,
                                       rx_axi4s_tready => apb_axi4s64_tready,
                                       tx_axi4s => res_axi4s64,
                                       tx_axi4s_tready <= res_axi4s64_tready,
-                                      apb_request => axi_apb_request,
-                                      apb_response <= axi_apb_response
+                                       dbg_master_req => dbg_master_req,
+                                       dbg_master_resp <= dbg_master_resp
             );
+
+        apb_script_master asm( clk <- clk,
+                           reset_n <= reset_n,
+                           dbg_master_req <= dbg_master_req,
+                           dbg_master_resp => dbg_master_resp,
+                           apb_request => axi_apb_request,
+                           apb_response <= axi_apb_response );
                
         axi4s64_to_axi4s32 axi_narrow_to_32( clk <- clk,
                             reset_n <= reset_n,

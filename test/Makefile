@@ -2,9 +2,8 @@ Q=@
 CDL_REGRESS = ${CDL_ROOT}/libexec/cdl/cdl_regress.py
 
 SMOKE_OPTIONS = --only-tests 'smoke'
-SMOKE_TESTS   = test_target_axi4s
-SMOKE_TESTS   = test_axi_debug_apb
-REGRESS_TESTS = test_target_axi4s
+SMOKE_TESTS   = test_target_axi4s test_axi_debug_apb
+REGRESS_TESTS = test_target_axi4s test_axi_debug_apb
 CDL_REGRESS_PACKAGE_DIRS = --package-dir regress:${SRC_ROOT}/python  --package-dir regress:${GRIP_ROOT_PATH}/atcf_hardware_apb/python
 
 .PHONY:smoke

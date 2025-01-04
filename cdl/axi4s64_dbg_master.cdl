@@ -20,6 +20,7 @@
 /*a Includes
  */
 include "std::srams.h"
+include "utils::debug.h"
 include "utils::sram_access.h"
 include "utils::fifo_modules.h"
 include "apb::apb_masters.h"
@@ -194,15 +195,15 @@ typedef struct {
 } t_pkt_state;
 
 /*a Module */
-module axi4s64_apb_master( clock clk         "System clock",
+module axi4s64_dbg_master( clock clk         "System clock",
                           input bit reset_n "Active low reset",
 
                           input t_axi4s64  rx_axi4s,
                           output bit       rx_axi4s_tready,
                           input bit        tx_axi4s_tready,
                           output t_axi4s64 tx_axi4s,
-                          output t_apb_request apb_request,
-                          input t_apb_response apb_response
+                           output t_dbg_master_request  dbg_master_req,
+                           input t_dbg_master_response  dbg_master_resp
     )
 """
 Take Eth-IPv4-Udp packets and parse them as APB requests
@@ -274,7 +275,6 @@ Example of using an APB target minimal UART:
     default reset active_low reset_n;
 
     net bit rx_axi4s_tready; 
-    net t_apb_request      apb_request;
 
     net t_fifo_status ib_fifo_status;
 
@@ -322,9 +322,6 @@ Example of using an APB target minimal UART:
 
     comb t_ais_combs ais_combs;
     clocked t_ais_state ais_state = {*=0};
-
-    comb t_apb_script_master_request  apb_script_req;
-    net t_apb_script_master_response  apb_script_resp;
 
     clocked t_ais_request ais_request = {*=0};
     net bit ais_ready;
@@ -609,30 +606,28 @@ Example of using an APB target minimal UART:
     /*b APB script FSM
      */
     apb_script_fsm : {
-        /* Instantiate the Script master
-         */
-        apb_script_master asm(clk <- clk,
-                              reset_n <= reset_n,
-                              apb_script_req <= apb_script_req,
-                              apb_script_resp => apb_script_resp,
-                              apb_request => apb_request,
-                              apb_response <= apb_response
-            );
-
         /* Determine apb_action
          */
+        dbg_master_req.op = dbg_op_idle;
+        dbg_master_req.data = bf_data;
+        dbg_master_req.num_data_valid = bf_data_num_bytes_valid;
+        bf_pop_num_bytes = dbg_master_resp.bytes_consumed;
+
         apb_combs.action = apb_action_none;
         apb_combs.completed = 0;
         full_switch (apb_state.fsm_state) {
         case apb_fsm_idle: {
             if (ib_combs.action == ib_action_pkt_start) {
                 apb_combs.action = apb_action_start;
+                dbg_master_req.op = dbg_op_start;
             }
         }
         case apb_fsm_present_payload: {
             apb_combs.action = apb_action_present_payload;
+            dbg_master_req.op = dbg_op_data;
             if (ib_combs.payload_copied && bf_data_num_bytes_valid==0) {
                 apb_combs.action = apb_action_present_last_payload;
+                dbg_master_req.op = dbg_op_data_last;
             }
         }
         case apb_fsm_completed: {
@@ -644,40 +639,31 @@ Example of using an APB target minimal UART:
         }
         }
         if (apb_state.fsm_state != apb_fsm_idle) {
-            if (apb_script_resp.resp_type == asm_resp_completed) {
+            if (dbg_master_resp.resp_type == dbg_resp_completed) {
                 apb_combs.action = apb_action_complete;
             }
-            if (apb_script_resp.resp_type == asm_resp_poll_failed) {
+            if (dbg_master_resp.resp_type == dbg_resp_poll_failed) {
                 apb_combs.action = apb_action_complete;
             }
-            if (apb_script_resp.resp_type == asm_resp_errored) {
+            if (dbg_master_resp.resp_type == dbg_resp_errored) {
                 apb_combs.action = apb_action_complete;
             }
         }
 
         /* Enact apb_action
          */
-        apb_script_req.op = asm_op_idle;
-        apb_script_req.data = bf_data[48;0];
-        apb_script_req.num_data_valid = bf_data_num_bytes_valid[3;0];
-        if (bf_data_num_bytes_valid[3]) {
-            apb_script_req.num_data_valid = 7;
-        }
-        bf_pop_num_bytes = bundle(1b0, apb_script_resp.bytes_consumed);
-
         full_switch (apb_combs.action) {
         case apb_action_none: {
             apb_state.fsm_state <= apb_state.fsm_state;
         }
         case apb_action_start: {
             apb_state.fsm_state <= apb_fsm_present_payload;
-            apb_script_req.op = asm_op_start;
         }
         case apb_action_present_payload: {
-            apb_script_req.op = asm_op_data;
+            apb_state.fsm_state <= apb_state.fsm_state;
         }
         case apb_action_present_last_payload: {
-            apb_script_req.op = asm_op_data_last;
+            apb_state.fsm_state <= apb_state.fsm_state;
         }
         case apb_action_flush_payload: {
             bf_pop_num_bytes = bf_data_num_bytes_valid;
@@ -744,10 +730,10 @@ Example of using an APB target minimal UART:
                 pkt_state <= pkt_state;
             }
         }
-        if (apb_script_resp.resp_type == asm_resp_errored) {
+        if (dbg_master_resp.resp_type == dbg_resp_errored) {
             pkt_state.apb_errored <= 1;
         }
-        if (apb_script_resp.resp_type == asm_resp_poll_failed) {
+        if (dbg_master_resp.resp_type == dbg_resp_poll_failed) {
             pkt_state.apb_errored <= 1;
             pkt_state.apb_poll_failed <= 1;
         }
@@ -769,7 +755,7 @@ Example of using an APB target minimal UART:
     data_buffer_logic : {
         byte_fifo_multiaccess_24_8 data_buffer( clk <- clk,
                                                 reset_n <= reset_n,
-                                                data_in <= bundle(32b0, apb_script_resp.data),
+                                                data_in <= bundle(32b0, dbg_master_resp.data),
                                                 data_in_bytes_valid <= ais_combs.resp_bytes_valid,
                                                 data_bytes_popped <= ais_combs.bytes_popped,
                                                 data_out => db_data,
@@ -795,11 +781,12 @@ Example of using an APB target minimal UART:
             }
         }
         case ais_fsm_gather_payload : {
-            full_switch (apb_script_resp.bytes_valid) {
+            full_switch (dbg_master_resp.bytes_valid) {
             case 0: { ais_combs.resp_bytes_valid = 0; }
             case 1: { ais_combs.resp_bytes_valid = 1; }
             case 2: { ais_combs.resp_bytes_valid = 2; }
-            case 3: { ais_combs.resp_bytes_valid = 4; }
+            case 3: { ais_combs.resp_bytes_valid = 3; }
+            default: { ais_combs.resp_bytes_valid = 4; }
             }
             if (db_data_num_bytes_valid >= 8) {
                 ais_combs.action = ais_action_gather_payload;

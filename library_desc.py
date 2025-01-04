@@ -41,7 +41,8 @@ class Axi4sModules(cdl_desc.Modules):
     modules += [ CdlModule("axi4s32_to_axi4s64") ]
     modules += [ CdlModule("axi4s64_to_axi4s128") ]
     modules += [ CdlModule("axi4s128_to_axi4s64") ]
-    modules += [ CdlModule("axi4s64_apb_master") ]
+    # modules += [ CdlModule("axi4s64_apb_master") ]
+    modules += [ CdlModule("axi4s64_dbg_master") ]
     modules += [ CdlModule("axi4s64_initiator_sram") ]
     modules += [ CdlModule("axi4s_process") ]
     modules += [ CdlModule("axi4s_process8_map_udp") ]
@@ -66,5 +67,16 @@ class Axi4sBFM(cdl_desc.Modules):
     modules += [ CSrc("axi_types", src_dir="csrc") ]
     modules += [ CModel("axi4s_th", src_dir="cmodel") ]
     # modules += [ Csrc("axi_master", src_dir="csrc") ]
+    pass
+
+class Axi4sPcapBFM(cdl_desc.Modules):
+    name = "axi4s_pcap_bfm"
+    src_dir      = "cmodel"
+    cpp_include_dirs=["csrc", "cmodel"]    
+    libraries = {"std":True, "utils":True}
+    modules = []
+    modules += [ CSrc("ef_object", src_dir="csrc") ]
+    modules += [ CSrc("axi_types", src_dir="csrc") ]
+    modules += [ CModel("axi4s_pcap", src_dir="cmodel") ]
     pass
 

@@ -23,6 +23,7 @@
 include "apb::apb.h"
 include "utils::fifo_status.h"
 include "utils::sram_access.h"
+include "utils::debug.h"
 include "parse.h"
 include "axi4s.h"
 
@@ -404,16 +405,16 @@ module axi4s128_fifo_4( clock clk                      "Clock for the FIFO",
 }
 
 /*m APB master */
-/*m axi4s64_apb_master */
+/*m axi4s64_dbg_master */
 extern
-module axi4s64_apb_master( clock clk                      "Clock for the FIFO",
+module axi4s64_dbg_master( clock clk                      "Clock for the FIFO",
                           input bit reset_n              "Asynchronous reset",
                           input t_axi4s64 rx_axi4s       "AXI4S input side master data",
                           output bit rx_axi4s_tready     "AXI4S input side slave 'tready' signal",
                           output t_axi4s64 tx_axi4s      "AXI4S output side master data",
                           input bit tx_axi4s_tready      "AXI4S output side slave 'tready' signal",
-                          output t_apb_request apb_request,
-                          input t_apb_response apb_response
+                           output t_dbg_master_request dbg_master_req,
+                           input t_dbg_master_response dbg_master_resp
     )
 {
     timing to    rising clock clk rx_axi4s;
@@ -422,8 +423,8 @@ module axi4s64_apb_master( clock clk                      "Clock for the FIFO",
     timing to    rising clock clk tx_axi4s_tready;
     timing from  rising clock clk tx_axi4s;
 
-    timing from rising clock clk apb_request;
-    timing to   rising clock clk apb_response;
+    timing from rising clock clk dbg_master_req;
+    timing to   rising clock clk dbg_master_resp;
 }
 
 /*a AXI4S processing */

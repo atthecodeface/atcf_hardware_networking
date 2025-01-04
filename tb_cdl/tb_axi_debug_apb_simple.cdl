@@ -21,6 +21,7 @@
 /*a Includes
  */
 include "std::srams.h"
+include "utils::debug.h"
 include "utils::sram_access.h"
 include "apb::apb.h"
 include "apb::apb_targets.h"
@@ -54,16 +55,25 @@ module tb_axi_debug_apb_simple( clock clk         "System clock",
     default reset active_low reset_n;
     clocked bit sram_did_read = 0;
 
+    net t_dbg_master_request dbg_master_req;
+    net t_dbg_master_response dbg_master_resp;
+
     code: {
-        axi4s64_apb_master axi_to_apb( clk <- clk,
+        axi4s64_dbg_master axi_to_dbg( clk <- clk,
                                       reset_n <= reset_n,
                                       rx_axi4s <= th_axi4s,
                                       rx_axi4s_tready => th_axi4s_tready,
                                       tx_axi4s => dut_axi4s,
                                       tx_axi4s_tready <= dut_axi4s_tready,
-                                      apb_request => apb_request,
-                                      apb_response <= apb_response
+                                       dbg_master_req => dbg_master_req,
+                                       dbg_master_resp <= dbg_master_resp
             );
+        apb_script_master asm( clk <- clk,
+                           reset_n <= reset_n,
+                           dbg_master_req <= dbg_master_req,
+                           dbg_master_resp => dbg_master_resp,
+                           apb_request => apb_request,
+                           apb_response <= apb_response );
                
         apb_target_sram_interface sram_apb( clk <- clk,
                                             reset_n <= reset_n,
