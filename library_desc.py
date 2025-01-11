@@ -69,14 +69,14 @@ class Axi4sBFM(cdl_desc.Modules):
     # modules += [ Csrc("axi_master", src_dir="csrc") ]
     pass
 
-class Axi4sPcapBFM(cdl_desc.Modules):
-    name = "axi4s_pcap_bfm"
-    src_dir      = "cmodel"
-    cpp_include_dirs=["csrc", "cmodel"]    
-    libraries = {"std":True, "utils":True}
-    modules = []
-    modules += [ CSrc("ef_object", src_dir="csrc") ]
-    modules += [ CSrc("axi_types", src_dir="csrc") ]
-    modules += [ CModel("axi4s_pcap", src_dir="cmodel") ]
-    pass
+#class Axi4sPcapBFM(cdl_desc.Modules):
+#    name = "axi4s_pcap_bfm"
+#    src_dir      = "cmodel"
+#    cpp_include_dirs=["csrc", "cmodel"]    
+#    libraries = {"std":True, "utils":True}
+#    modules = []
+#    modules += [ CSrc("ef_object", src_dir="csrc") ]
+#    modules += [ CSrc("axi_types", src_dir="csrc") ]
+#    modules += [ CModel("axi4s_pcap", src_dir="cmodel") ]
+#    pass
 
